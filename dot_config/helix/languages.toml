@@ -1,0 +1,19 @@
+[[language]]
+name = "markdown"
+formatter =  { command = "prettier", args = ["--parser", "markdown", "--prose-wrap", "always"] }
+
+[[language]]
+name = "python"
+rulers = [89]
+
+[language.formatter]
+command = "black"
+args = [
+  "-", # stdin
+  "--quiet",
+  "--experimental-string-processing",
+]
+
+[[language]]
+name = "rust"
+rulers = [101]

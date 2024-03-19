@@ -1,0 +1,164 @@
+#
+# wm independent hotkeys
+#
+
+# terminal emulator
+super + a
+	alacritty
+
+# media keys
+
+# light-git, light doesn't work for some reason
+XF86MonBrightnessUp
+	light -A 10
+
+XF86MonBrightnessDown
+	light -U 10
+
+XF86AudioLowerVolume
+	amixer set Master 10%-
+
+XF86AudioRaiseVolume
+	amixer set Master 10%+
+
+XF86AudioMute
+	amixer set Master toggle
+
+XF86AudioMicMute
+	amixer set Capture toggle
+
+super + alt + n
+    ~/configure_monitors.sh laptop
+
+super + alt + m
+    autorandr --change
+
+Print
+	flameshot gui
+
+super + l
+	setxkbmap us; xmodmap ~/.Xmodmap; slock
+
+# https://wiki.archlinux.org/title/Slock "Lock on suspend"
+super + k
+	setxkbmap us; xmodmap ~/.Xmodmap; systemctl suspend
+
+# Print
+# 	scrot
+
+super + c
+	xterm -e /bin/bash -i
+
+super + e
+	bspc desktop -f '^7'; \
+	alacritty -t mutt -e tmux new-session -A -s mail /bin/bash -ic "mutt -e 'source ~/.mutt/account.fm'"
+
+super + {j,k}
+	pactl set-sink-mute @DEFAULT_SINK@ false ; pactl set-sink-volume @DEFAULT_SINK@ {-,+}3%
+
+super + p
+	playerctl play-pause
+
+super + i
+	playerctl next
+
+super + u
+	playerctl previous
+
+# make sxhkd reload its configuration files:
+super + Escape
+	pkill -USR1 -x sxhkd
+
+#
+# bspwm hotkeys
+#
+
+# quit/restart bspwm
+super + alt + {q,r}
+	bspc {quit,wm --restart}
+
+# close and kill
+super + {_,shift + }w
+	bspc node --{close,kill}
+
+# alternate between the tiled and monocle layout
+super + m
+	bspc desktop --layout next
+
+# send the newest marked node to the newest preselected node
+super + y
+	bspc node newest.local --to-node newest.!automatic.local
+
+# swap the current node and the biggest node on this screen
+super + Return
+	bspc node newest.local --swap biggest.local
+
+#
+# state/flags
+#
+
+# set the window state
+super + {t,shift + t,s,f}
+	bspc node --state {tiled,pseudo_tiled,floating,fullscreen}
+
+# set the node flags
+super + ctrl + {m,x,y,z}
+	bspc node --flag {marked,locked,sticky,private}
+
+#
+# focus/swap
+#
+
+# focus the node in the given direction
+alt + {_,shift + }{h,j,k,l}
+	bspc node --{focus,swap} {west,south,north,east}
+
+# focus the older or newer node in the focus history
+super + {o, i}
+	bspc wm --record-history off; \
+	bspc node {older,newer} --focus; \
+	bspc wm --record-history on
+
+# focus or send to the next/previous monitor
+super + {_,shift + }bracket{left,right}
+	bspc {monitor --focus,node --to-monitor} {prev,next}
+
+# focus or send to the given desktop on the current monitor
+alt + {_,shift + }{1-9,0}
+	bspc {desktop --focus,node --to-desktop} 'focused:^{1-9,10}.local'
+
+#
+# preselect
+#
+
+# preselect the direction
+super + ctrl + {h,j,k,l}
+	bspc node --presel-dir {west,south,north,east}
+
+# preselect the ratio
+super + ctrl + {1-9}
+	bspc node --presel-ratio 0.{1-9}
+
+# cancel the preselection for the focused node
+super + ctrl + space
+	bspc node --presel-dir cancel
+
+# cancel the preselection for the focused desktop
+super + ctrl + shift + space
+	bspc query --nodes --desktop | xargs -I id --max-args 1 bspc node id --presel-dir cancel
+
+#
+# move/resize
+#
+
+# expand a window by moving one of its side outward
+super + alt + {h,j,k,l}
+	bspc node --resize {left -40 0,bottom 0 40,top 0 -40,right 40 0}
+
+# contract a window by moving one of its side inward
+super + alt + shift + {h,j,k,l}
+	bspc node --resize {right -40 0,top 0 40,bottom 0 -40,left 40 0}
+
+# move a floating window
+super + shift + {h,j,k,l}
+	bspc node --move {-40 0,0 40,0 -40,40 0}

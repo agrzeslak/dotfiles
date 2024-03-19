@@ -1,0 +1,26 @@
+[core]
+    editor = nvim
+    excludesFile = ~/.gitignore
+
+[ui "color"]
+    ui = always
+
+[color]
+    ui = true
+
+[core]
+    autocrlf = input
+    safecrlf = true
+
+[merge]
+    tool = nvim -d
+
+[pull]
+    ff = only
+
+[push]
+    default = simple
+
+[diff]
+    algorithm = patience
+    compactionHeuristic = true
