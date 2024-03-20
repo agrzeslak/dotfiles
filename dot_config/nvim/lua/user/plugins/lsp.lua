@@ -155,7 +155,7 @@ return {
 				css = { "eslint_d" },
 				html = { "eslint_d" },
 				javascript = { "eslint_d" },
-				markdown = { "vale", "markdownlint" },
+				markdown = { "markdownlint" },
 				python = { "flake8" },
 				svelte = { "eslint_d" },
 				typescript = { "eslint_d" },
