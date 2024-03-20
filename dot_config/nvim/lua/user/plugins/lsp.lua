@@ -118,21 +118,20 @@ return {
 		"stevearc/conform.nvim", -- Interface for formatters
 		config = function()
 			local conform = require("conform")
+			local prettier = { { "prettierd", "prettier" } }
 			conform.setup {
 				formatters_by_ft = {
-					-- Single list ({}) to run all available formatters
-					-- Nested list ({{}}) to run only first available formatters
-					css = { { "prettierd", "prettier" } },
-					html = { { "prettierd", "prettier" } },
-					javascript = { { "prettierd", "prettier" } },
-					typescript = { { "prettierd", "prettier" } },
-					javascriptreact = { { "prettierd", "prettier" } },
-					typescriptreact = { { "prettierd", "prettier" } },
-					-- FIXME: Unclear how to use `--prose-wrap` always with prettierd, and
-					--				it's required for markdown formatting to work properly.
-					markdown = { "prettier" },
-					svelte = { { "prettierd", "prettier" } },
-					yaml = { { "prettierd", "prettier" } },
+					-- Single list ({}) to sequentially run all available formatters
+					-- Nested list ({{}}) to run only first available formatter
+					css = prettier,
+					html = prettier,
+					javascript = prettier,
+					typescript = prettier,
+					javascriptreact = prettier,
+					typescriptreact = prettier,
+					markdown = prettier,
+					svelte = prettier,
+					yaml = prettier,
 					lua = { "stylua" },
 					python = { "isort", "black" },
 					xml = { "xmlformat " },
@@ -146,11 +145,6 @@ return {
 				"<cmd>lua require'conform'.format{async=true,lsp_fallback=true}<CR>",
 				{ noremap = true, silent = true }
 			)
-
-			-- Customising formatters
-			conform.formatters.prettier = {
-				prepend_args = { "--prose-wrap", "always" },
-			}
 		end,
 
 	},

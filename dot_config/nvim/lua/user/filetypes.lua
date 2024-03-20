@@ -15,6 +15,7 @@ vim.api.nvim_create_autocmd(
 			"html",
 			"javascript",
 			"javascriptreact",
+			"json",
 			"lua",
 			"markdown",
 			"typescript",
