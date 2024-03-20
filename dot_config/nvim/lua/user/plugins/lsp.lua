@@ -69,7 +69,7 @@ return {
 								},
 								imports = {
 									group = {
-										enable = false,  -- All imports together, no empty lines
+										enable = false, -- All imports together, no empty lines
 									}
 								},
 							},
@@ -116,23 +116,43 @@ return {
 	"neovim/nvim-lspconfig",
 	{
 		"stevearc/conform.nvim", -- Interface for formatters
-		opts = {
-			formatters_by_ft = {
-				-- Single list ({}) to run all available formatters
-				-- Nested list ({{}}) to run only first available formatters
-				css = { { "prettierd", "prettier" } },
-				html = { { "prettierd", "prettier" } },
-				javascript = { { "prettierd", "prettier" } },
-				markdown = { { "prettierd", "prettier" } },
-				typescript = { { "prettierd", "prettier" } },
-				svelte = { { "prettierd", "prettier" } },
-				yaml = { { "prettierd", "prettier" } },
-
-				lua = { "stylua" },
-				python = { "isort", "black" },
-				xml = { "xmlformat " },
+		config = function()
+			local conform = require("conform")
+			conform.setup {
+				formatters_by_ft = {
+					-- Single list ({}) to run all available formatters
+					-- Nested list ({{}}) to run only first available formatters
+					css = { { "prettierd", "prettier" } },
+					html = { { "prettierd", "prettier" } },
+					javascript = { { "prettierd", "prettier" } },
+					typescript = { { "prettierd", "prettier" } },
+					javascriptreact = { { "prettierd", "prettier" } },
+					typescriptreact = { { "prettierd", "prettier" } },
+					-- FIXME: Unclear how to use `--prose-wrap` always with prettierd, and
+					--				it's required for markdown formatting to work properly.
+					markdown = { "prettier" },
+					svelte = { { "prettierd", "prettier" } },
+					yaml = { { "prettierd", "prettier" } },
+					lua = { "stylua" },
+					python = { "isort", "black" },
+					xml = { "xmlformat " },
+				}
 			}
-		}
+
+			-- Set up <C-t> to format, with LSP as fallback
+			vim.keymap.set(
+				"n",
+				"<leader>t",
+				"<cmd>lua require'conform'.format{async=true,lsp_fallback=true}<CR>",
+				{ noremap = true, silent = true }
+			)
+
+			-- Customising formatters
+			conform.formatters.prettier = {
+				prepend_args = { "--prose-wrap", "always" },
+			}
+		end,
+
 	},
 	{
 		"mfussenegger/nvim-lint", -- Interface for linters
@@ -146,6 +166,11 @@ return {
 				svelte = { "eslint_d" },
 				typescript = { "eslint_d" },
 			}
+			vim.api.nvim_create_autocmd("BufWritePost", {
+				callback = function()
+					require("lint").try_lint()
+				end,
+			})
 		end,
 	},
 	{
