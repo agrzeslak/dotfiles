@@ -1,7 +1,7 @@
 return {
 	{
 		"williamboman/mason.nvim",
-		opts = {}
+		opts = {},
 	},
 	{
 		"williamboman/mason-lspconfig.nvim",
@@ -13,12 +13,12 @@ return {
 			-- Order important: mason -> mason-lspconfig -> nvim-lspconfig setup
 			require("mason-lspconfig").setup()
 			local lspconfig = require("lspconfig")
-			require("mason-lspconfig").setup_handlers {
+			require("mason-lspconfig").setup_handlers({
 				-- This is a default handler that will be called for each
 				-- installed server (also for new servers that are installed
 				-- during a session)
 				function(server_name)
-					lspconfig[server_name].setup {}
+					lspconfig[server_name].setup({})
 				end,
 
 				-- Manual dedicated handlers for servers where we want custom
@@ -30,13 +30,13 @@ return {
 								runtime = {
 									-- Tell the language server which version of Lua you're using
 									-- (most likely LuaJIT in the case of Neovim)
-									version = 'LuaJIT',
+									version = "LuaJIT",
 								},
 								diagnostics = {
 									-- Get the language server to recognize the `vim` global
 									globals = {
-										'vim',
-										'require'
+										"vim",
+										"require",
 									},
 								},
 								workspace = {
@@ -70,13 +70,13 @@ return {
 								imports = {
 									group = {
 										enable = false, -- All imports together, no empty lines
-									}
+									},
 								},
 							},
-						}
+						},
 					})
 				end,
-			}
+			})
 		end,
 	},
 	{
@@ -105,13 +105,14 @@ return {
 				"pyright",
 				"prettierd",
 				"rust-analyzer",
+				"stylua",
 				"svelte-language-server",
 				"tailwindcss-language-server",
 				"typescript-language-server",
 				"vale",
 				"xmlformatter",
-			}
-		}
+			},
+		},
 	},
 	"neovim/nvim-lspconfig",
 	{
@@ -119,7 +120,7 @@ return {
 		config = function()
 			local conform = require("conform")
 			local prettier = { { "prettierd", "prettier" } }
-			conform.setup {
+			conform.setup({
 				formatters_by_ft = {
 					-- Single list ({}) to sequentially run all available formatters
 					-- Nested list ({{}}) to run only first available formatter
@@ -135,8 +136,8 @@ return {
 					lua = { "stylua" },
 					python = { "isort", "black" },
 					xml = { "xmlformat " },
-				}
-			}
+				},
+			})
 
 			-- Set up <C-t> to format, with LSP as fallback
 			vim.keymap.set(
@@ -146,7 +147,6 @@ return {
 				{ noremap = true, silent = true }
 			)
 		end,
-
 	},
 	{
 		"mfussenegger/nvim-lint", -- Interface for linters
@@ -175,8 +175,8 @@ return {
 			-- Only show argument lists, no docs
 			doc_lines = 0,
 			handler_opts = {
-				border = "none"
-			}
+				border = "none",
+			},
 		},
 	},
 }

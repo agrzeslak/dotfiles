@@ -5,7 +5,7 @@ return {
 		dependencies = { "nvim-lua/plenary.nvim" },
 		config = function()
 			local actions = require("telescope.actions")
-			require("telescope").setup {
+			require("telescope").setup({
 				defaults = {
 					prompt_prefix = " ",
 					selection_caret = " ",
@@ -28,7 +28,7 @@ return {
 							override_generic_sorter = true,
 							override_file_sorter = true,
 							case_mode = "smart_case",
-						}
+						},
 					},
 
 					mappings = {
@@ -109,15 +109,15 @@ return {
 						-- filetypes whitelist
 						-- defaults to {"png", "jpg", "mp4", "webm", "pdf"}
 						filetypes = { "png", "webp", "jpg", "jpeg", "pdf" },
-						find_cmd = "rg" -- find command (defaults to `fd`)
-					}
+						find_cmd = "rg", -- find command (defaults to `fd`)
+					},
 					-- Your extension configuration goes here:
 					-- extension_name = {
 					--   extension_config_key = value,
 					-- }
 					-- please take a look at the readme of the extension you want to configure
 				},
-			}
+			})
 		end,
 	},
 	{

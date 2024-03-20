@@ -1,7 +1,7 @@
 -- Highlight yanked text
 vim.api.nvim_create_autocmd("TextYankPost", {
 	pattern = "*",
-	command = "silent! lua vim.highlight.on_yank({ timeout = 500 })"
+	command = "silent! lua vim.highlight.on_yank({ timeout = 500 })",
 })
 
 -- Jump to last edit position on opening file
@@ -15,7 +15,7 @@ vim.api.nvim_create_autocmd("BufReadPost", {
 				vim.cmd('exe "normal! g\'\\""')
 			end
 		end
-	end
+	end,
 })
 
 -- Remove trailing whitespace on save https://vi.stackexchange.com/questions/37421/how-to-remove-neovim-trailing-white-space
@@ -23,7 +23,9 @@ vim.api.nvim_create_autocmd("BufWritePre", {
 	pattern = "*",
 	callback = function(ev)
 		local save_cursor = vim.fn.getpos(".")
-		pcall(function() vim.cmd [[%s/\s\+$//e]] end)
+		pcall(function()
+			vim.cmd([[%s/\s\+$//e]])
+		end)
 		vim.fn.setpos(".", save_cursor)
 	end,
 })

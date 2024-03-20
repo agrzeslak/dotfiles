@@ -1,9 +1,9 @@
 return {
 	"nvim-lualine/lualine.nvim",
-	dependencies = { 'nvim-tree/nvim-web-devicons' },
+	dependencies = { "nvim-tree/nvim-web-devicons" },
 	config = function()
 		vim.opt.showmode = false
-		require("lualine").setup {
+		require("lualine").setup({
 			options = {
 				icons_enabled = true,
 				theme = "gruvbox-material",
@@ -28,7 +28,7 @@ return {
 				lualine_c = { { "filename", path = 1 } },
 				lualine_x = { "encoding", "fileformat", "filetype" },
 				lualine_y = { "progress" },
-				lualine_z = { "location" }
+				lualine_z = { "location" },
 			},
 			inactive_sections = {
 				lualine_a = {},
@@ -36,12 +36,12 @@ return {
 				lualine_c = { "filename" },
 				lualine_x = { "location" },
 				lualine_y = {},
-				lualine_z = {}
+				lualine_z = {},
 			},
 			tabline = {},
 			winbar = {},
 			inactive_winbar = {},
-			extensions = {}
-		}
+			extensions = {},
+		})
 	end,
 }
