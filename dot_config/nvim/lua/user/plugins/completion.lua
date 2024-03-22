@@ -2,14 +2,14 @@ return {
 	{
 		"saadparwaiz1/cmp_luasnip", -- Completions from LuaSnip
 		dependencies = {
-			"L3MON4D3/LuaSnip", -- Snippet engine
+			"L3MON4D3/LuaSnip",
 		},
 	},
 	-- Completion engine itself
 	{
 		"hrsh7th/nvim-cmp",
 		dependencies = {
-			"L3MON4D3/LuaSnip", -- Snippet engine
+			"L3MON4D3/LuaSnip", -- Snippet engine required
 			"hrsh7th/cmp-buffer", -- Completions sourced from buffer
 			"hrsh7th/cmp-path", -- Completions sourced from filesystem paths
 			"hrsh7th/cmp-nvim-lua", -- Completions sourced from Neovim's Lua API

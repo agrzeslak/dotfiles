@@ -1,2 +1,2 @@
-.config/fish/work.fish
-.config/nvim/{plugin/packer_compiled.lua, plugged, *.pyc, pythonx, spell}
+**/work.*
+.config/nvim/spell
