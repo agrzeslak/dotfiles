@@ -151,7 +151,8 @@ return {
 	{
 		"mfussenegger/nvim-lint", -- Interface for linters
 		config = function()
-			require("lint").linters_by_ft = {
+			local lint = require("lint")
+			lint.linters_by_ft = {
 				css = { "eslint_d" },
 				html = { "eslint_d" },
 				javascript = { "eslint_d" },
@@ -160,6 +161,7 @@ return {
 				svelte = { "eslint_d" },
 				typescript = { "eslint_d" },
 			}
+
 			vim.api.nvim_create_autocmd("BufWritePost", {
 				callback = function()
 					require("lint").try_lint()
