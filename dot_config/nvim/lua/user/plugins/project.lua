@@ -7,6 +7,7 @@ return {
 			-- is doing some really whacky things, so I've disabled it for now.
 			detection_methods = { "pattern" },
 			patterns = {
+				-- Default
 				".git",
 				"_darcs",
 				".hg",
@@ -14,8 +15,9 @@ return {
 				".svn",
 				"Makefile",
 				"package.json",
-				">pentests",
+				-- Custom
 				">.config",
+				">pentests",
 			},
 		})
 	end,
