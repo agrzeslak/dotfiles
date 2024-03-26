@@ -24,6 +24,7 @@ abbr -a kr 'keybase chat read'
 abbr -a kl 'keybase chat list'
 abbr -a pm pulsemixer
 abbr -a bt bluetoothctl
+abbr -a cm chezmoi
 complete --command paru --wraps pacman
 
 if status --is-interactive
