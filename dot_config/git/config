@@ -22,5 +22,5 @@
     default = simple
 
 [diff]
-    algorithm = patience
-    compactionHeuristic = true
+    algorithm = histogram
+    indentHeuristic = true
