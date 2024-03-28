@@ -46,9 +46,6 @@ set("n", "*", "m`:keepjumps normal! *``<cr>")
 set("n", "gp", "<cmd>bp<cr>")
 set("n", "gn", "<cmd>bn<cr>")
 
--- Ctrl+j as Esc
-set({ "n", "i", "v", "s", "x", "c", "o", "l", "t" }, "<C-j>", "<Esc>")
-
 -- Telescope
 -- set("n", "<leader>f", "<cmd>lua require'telescope.builtin'.find_files(require('telescope.themes').get_ivy({}))<cr>", opts)
 -- TODO: Switch back to Telescope when proximity sort is implemented. As of now

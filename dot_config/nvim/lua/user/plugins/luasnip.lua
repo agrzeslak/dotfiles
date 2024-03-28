@@ -25,7 +25,7 @@ return {
 		end, { noremap = true, silent = true })
 
 		-- Go back to previous item in snippet
-		vim.keymap.set({ "i", "s" }, "<C-h>", function()
+		vim.keymap.set({ "i", "s" }, "<C-j>", function()
 			if ls.jumpable(-1) then
 				ls.jump(-1)
 			end
