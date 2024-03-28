@@ -20,6 +20,12 @@ vim.api.nvim_create_autocmd("Filetype", {
 	command = "setlocal shiftwidth=2 tabstop=2",
 })
 
+-- Filetypes where tab = 4 spaces
+vim.api.nvim_create_autocmd("Filetype", {
+	pattern = { "cs" },
+	command = "setlocal shiftwidth=4 tabstop=4",
+})
+
 -- Git commit messages
 vim.api.nvim_create_autocmd("Filetype", {
 	pattern = "gitcommit",
