@@ -31,13 +31,8 @@ set("n", "k", "gk")
 
 -- Delete without yanking
 set("n", "<leader>d", '"_d')
-set("n", "<leader>d", '"_d')
-set("n", "<leader>D", '"_D')
 set("n", "<leader>D", '"_D')
 set("n", "<leader>x", '"_x')
-
--- Paste without yanking
-set("v", "<leader>p", '"_dP')
 
 -- Do not instantly move to next result. Useful with cgn.
 set("n", "*", "m`:keepjumps normal! *``<cr>")
