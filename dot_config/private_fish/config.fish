@@ -174,10 +174,7 @@ function tmux_switch_session
 			return
 		end
 
-		if test -z $chosen_session
-			tmux switch-client -t $chosen_session
-		end
-
+		tmux switch-client -t $chosen_session
 		return
 	end
 
