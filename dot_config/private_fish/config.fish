@@ -1,7 +1,6 @@
 abbr -a yr 'cal -y'
 abbr -a c cargo
 abbr -a e nvim
-# abbr -a e helix
 abbr -a se sudoedit
 abbr -a m make
 abbr -a o xdg-open
@@ -34,7 +33,10 @@ if status --is-interactive
 		builtin source ~/dev/others/base16/templates/fish-shell/conf.d/base16.fish
 	end
 	if ! set -q TMUX
-		exec tmux
+		# Always attach to the same session rather than creating a new
+		# one when a new terminal is opened. This is almost always
+		# what's intended.
+		exec tmux new-session -As "0"
 	end
 end
 
@@ -168,21 +170,20 @@ end
 function tmux_switch_session
 	if test -z $argv
 		# No argument provided; choose from existing sessions
-		set chosen_session (tmux list-sessions | fzf)
+		if not set chosen_session (tmux list-sessions -F \#S | fzf)
+			return
+		end
 
-		# $chosen_session is not set if nothing was chosen
-		if set -q $chosen_session
+		if test -z $chosen_session
 			tmux switch-client -t $chosen_session
 		end
+
 		return
 	end
 
 	# Search for provided path and attach to its session, creating it if it
 	# doesn't exist
-	set target_path (zoxide query -i $argv)
-
-	# $target_path is set to an empty string if no result was chosen
-	if test -z $target_path
+	if not set target_path (zoxide query -i $argv)
 		return
 	end
 
