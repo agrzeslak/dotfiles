@@ -25,67 +25,68 @@ abbr -a kl 'keybase chat list'
 abbr -a pm pulsemixer
 abbr -a bt bluetoothctl
 abbr -a cm chezmoi
+abbr -a t tmux_switch_session
 complete --command paru --wraps pacman
 
 if status --is-interactive
-    if test -d ~/dev/others/base16/templates/fish-shell
-        set fish_function_path $fish_function_path ~/dev/others/base16/templates/fish-shell/functions
-        builtin source ~/dev/others/base16/templates/fish-shell/conf.d/base16.fish
-    end
-    if ! set -q TMUX
-        exec tmux
-    end
+	if test -d ~/dev/others/base16/templates/fish-shell
+		set fish_function_path $fish_function_path ~/dev/others/base16/templates/fish-shell/functions
+		builtin source ~/dev/others/base16/templates/fish-shell/conf.d/base16.fish
+	end
+	if ! set -q TMUX
+		exec tmux
+	end
 end
 
 if command -v eza > /dev/null
-    abbr -a l 'eza'
-    abbr -a ls 'eza'
-    abbr -a ll 'eza -l'
-    abbr -a lll 'eza -la'
+	abbr -a l 'eza'
+	abbr -a ls 'eza'
+	abbr -a ll 'eza -l'
+	abbr -a lll 'eza -la'
 else
-    abbr -a l 'ls'
-    abbr -a ll 'ls -l'
-    abbr -a lll 'ls -la'
+	abbr -a l 'ls'
+	abbr -a ll 'ls -l'
+	abbr -a lll 'ls -la'
 end
 
 if type -q zoxide
-    zoxide init --cmd j fish | source
+	zoxide init --cmd j fish | source
 end
 
 function apass
-    if test (count $argv) -ne 1
-        pass $argv
-        return
-    end
+	if test (count $argv) -ne 1
+		pass $argv
+		return
+	end
 
-    asend (pass $argv[1] | head -n1)
+	asend (pass $argv[1] | head -n1)
 end
 
 function qrpass
-    if test (count $argv) -ne 1
-        pass $argv
-        return
-    end
+	if test (count $argv) -ne 1
+		pass $argv
+		return
+	end
 
-    qrsend (pass $argv[1] | head -n1)
+	qrsend (pass $argv[1] | head -n1)
 end
 
 function asend
-    if test (count $argv) -ne 1
-        echo "No argument given"
-        return
-    end
+	if test (count $argv) -ne 1
+		echo "No argument given"
+		return
+	end
 
-    adb shell input text (echo $argv[1] | sed -e 's/ /%s/g' -e 's/\([#[()<>{}$|;&*\\~"\'`]\)/\\\\\1/g')
+	adb shell input text (echo $argv[1] | sed -e 's/ /%s/g' -e 's/\([#[()<>{}$|;&*\\~"\'`]\)/\\\\\1/g')
 end
 
 function qrsend
-    if test (count $argv) -ne 1
-        echo "No argument given"
-        return
-    end
+	if test (count $argv) -ne 1
+		echo "No argument given"
+		return
+	end
 
-    qrencode -o - $argv[1] | feh --geometry 500x500 --auto-zoom -
+	qrencode -o - $argv[1] | feh --geometry 500x500 --auto-zoom -
 end
 
 function limit
@@ -93,79 +94,116 @@ function limit
 end
 
 function remote_alacritty
-    # https://gist.github.com/costis/5135502
-    set fn (mktemp)
-    infocmp alacritty > $fn
-    scp $fn $argv[1]":alacritty.ti"
-    ssh $argv[1] tic "alacritty.ti"
-    ssh $argv[1] rm "alacritty.ti"
+	# https://gist.github.com/costis/5135502
+	set fn (mktemp)
+	infocmp alacritty > $fn
+	scp $fn $argv[1]":alacritty.ti"
+	ssh $argv[1] tic "alacritty.ti"
+	ssh $argv[1] rm "alacritty.ti"
 end
 
 # Type - to move up to top parent dir which is a repository
 function d
-    while test $PWD != "/"
-        if test -d .git
-                break
-        end
-        cd ..
-    end
+	while test $PWD != "/"
+		if test -d .git
+				break
+		end
+		cd ..
+	end
 end
 
 function bind_bang
-    switch (commandline -t)[-1]
-        case "!"
-            commandline -t -- $history[1]
-            commandline -f repaint
-        case "*"
-            commandline -i !
-    end
+	switch (commandline -t)[-1]
+		case "!"
+			commandline -t -- $history[1]
+			commandline -f repaint
+		case "*"
+			commandline -i !
+	end
 end
 
 function bind_dollar
-    switch (commandline -t)[-1]
-        case "!"
-            commandline -f backward-delete-char history-token-search-backward
-        case "*"
-            commandline -i '$'
-    end
+	switch (commandline -t)[-1]
+		case "!"
+			commandline -f backward-delete-char history-token-search-backward
+		case "*"
+			commandline -i '$'
+	end
 end
 
 function strip_ansi
-    if test (count $argv) -ne 1
-        echo "strip_ansi <source file>"
-        return
-    end
-    sed -e 's/\x1b\[[0-9;]*m//g' $argv[1] > $argv[1].tmp
-    mv $argv[1].tmp $argv[1]
+	if test (count $argv) -ne 1
+		echo "strip_ansi <source file>"
+		return
+	end
+	sed -e 's/\x1b\[[0-9;]*m//g' $argv[1] > $argv[1].tmp
+	mv $argv[1].tmp $argv[1]
 end
 
 function java_ui_scale
 # TODO: Programmatically apply this.
 # To make Java apps scale correctly on HiDPI displays.
-    if test (count $argv) -ne 1
-        echo "java_ui_scale <scale>"
-        return
-    end
-    set -gx _JAVA_OPTIONS '-Dsun.java2d.uiScale='$argv[1]
+	if test (count $argv) -ne 1
+		echo "java_ui_scale <scale>"
+		return
+	end
+	set -gx _JAVA_OPTIONS '-Dsun.java2d.uiScale='$argv[1]
 end
 
 function ssh_via_socks
-    if test (count $argv) -ne 4
-        echo "ssh-via-socks <proxy> <proxy user> <proxy pass> <ssh user@server>"
-        return
-    end
-    ssh -o ProxyCommand='nc --proxy-type socks5 --proxy '$argv[1]' --proxy-auth '$argv[2]':'$argv[3]' %h %p' $argv[4]
+	if test (count $argv) -ne 4
+		echo "ssh-via-socks <proxy> <proxy user> <proxy pass> <ssh user@server>"
+		return
+	end
+	ssh -o ProxyCommand='nc --proxy-type socks5 --proxy '$argv[1]' --proxy-auth '$argv[2]':'$argv[3]' %h %p' $argv[4]
 end
 
 function retry
-    while true;
-        eval $argv && break
-        sleep 1
-    end
+	while true;
+		eval $argv && break
+		sleep 1
+	end
+end
+
+function tmux_switch_session
+	if test -z $argv
+		# No argument provided; choose from existing sessions
+		set chosen_session (tmux list-sessions | fzf)
+
+		# $chosen_session is not set if nothing was chosen
+		if set -q $chosen_session
+			tmux switch-client -t $chosen_session
+		end
+		return
+	end
+
+	# Search for provided path and attach to its session, creating it if it
+	# doesn't exist
+	set target_path (zoxide query -i $argv)
+
+	# $target_path is set to an empty string if no result was chosen
+	if test -z $target_path
+		return
+	end
+
+	set name (basename $target_path | tr . _)
+
+	# tmux isn't running; create the new session
+	if test -z TMUX && test -z (pgrep tmux)
+		tmux new-session -c $name -s $target_path
+		return
+	end
+
+	# tmux is already running; only create the session if it doesn't exist
+	if not tmux has-session -t $name 2>/dev/null
+		tmux new-session -c $target_path -ds $name
+	end
+
+	tmux switch-client -t $name
 end
 
 if test -e ~/.config/fish/work.fish
-    builtin source ~/.config/fish/work.fish
+	builtin source ~/.config/fish/work.fish
 end
 
 # Fish git prompt
@@ -219,8 +257,8 @@ function fish_user_key_bindings
 	if functions -q fzf_key_bindings
 		fzf_key_bindings
 	end
-    bind ! bind_bang
-    bind '$' bind_dollar
+	bind ! bind_bang
+	bind '$' bind_dollar
 end
 
 function fish_prompt
