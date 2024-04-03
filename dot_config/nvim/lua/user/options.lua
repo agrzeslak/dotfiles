@@ -32,6 +32,7 @@ vim.opt.vb = true -- Never audibly beep
 vim.opt.colorcolumn = "81" -- Vertical column 1 after textwidth to show it as the boundary
 vim.opt.textwidth = 80
 vim.opt.foldlevelstart = 99 -- Start with everything unfolded
+vim.opt.spell = true
 -- Diffs (nvim -d)
 vim.opt.diffopt:append("iwhite") -- Ignore whitespace
 vim.opt.diffopt:append("algorithm:histogram")
