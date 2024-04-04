@@ -168,8 +168,11 @@ function retry
 end
 
 function tmux_create_session
-	if not set target_path (zoxide query -i)
-		return
+	# Search common paths first, then all visited directories
+	if not set target_path (ls ~/dev ~/dev/others ~/pentests | fzf)
+		if not set target_path (zoxide query -i)
+			return
+		end
 	end
 
 	set name (basename $target_path | tr . _)
