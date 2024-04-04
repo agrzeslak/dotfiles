@@ -167,20 +167,8 @@ function retry
 	end
 end
 
-function tmux_switch_session
-	if test -z $argv
-		# No argument provided; choose from existing sessions
-		if not set chosen_session (tmux list-sessions -F \#S | fzf)
-			return
-		end
-
-		tmux switch-client -t $chosen_session
-		return
-	end
-
-	# Search for provided path and attach to its session, creating it if it
-	# doesn't exist
-	if not set target_path (zoxide query -i $argv)
+function tmux_create_session
+	if not set target_path (zoxide query -i)
 		return
 	end
 
@@ -198,6 +186,14 @@ function tmux_switch_session
 	end
 
 	tmux switch-client -t $name
+end
+
+function tmux_switch_session
+	if not set chosen_session (tmux list-sessions -F \#S | fzf)
+		return
+	end
+	tmux switch-client -t $chosen_session
+	return
 end
 
 if test -e ~/.config/fish/work.fish
