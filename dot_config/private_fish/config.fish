@@ -195,8 +195,8 @@ function tmux_switch_session
 	if not set chosen_session (tmux list-sessions -F \#S | fzf)
 		return
 	end
+
 	tmux switch-client -t $chosen_session
-	return
 end
 
 if test -e ~/.config/fish/work.fish
