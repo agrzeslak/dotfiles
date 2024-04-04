@@ -25,10 +25,6 @@ set("n", "?", "?\\v")
 set("n", "/", "/\\v")
 set("c", "%s/", "%sm/")
 
--- Make j and k move by visual line, not actual line, when text is soft-wrapped
-set("n", "j", "gj")
-set("n", "k", "gk")
-
 -- Delete without yanking
 set("n", "<leader>d", '"_d')
 set("n", "<leader>D", '"_D')
