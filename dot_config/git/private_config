@@ -1,0 +1,39 @@
+[core]
+	editor = nvim
+	excludesFile = ~/.gitignore
+
+[ui "color"]
+	ui = always
+
+[color]
+	ui = true
+
+[core]
+	autocrlf = input
+	safecrlf = true
+
+[merge]
+	tool = nvim -d
+
+[pull]
+	ff = only
+
+[push]
+	default = simple
+
+[diff]
+	algorithm = histogram
+	indentHeuristic = true
+
+[gpg]
+	format = ssh
+
+[gpg "ssh"]
+
+	program = /opt/1Password/op-ssh-sign
+
+[commit]
+	gpgsign = true
+
+[user]
+	signingkey = ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFlDUOc/hleO5T3M7QOQHbERQIoCqYsPN0PaS2sAkHJa
