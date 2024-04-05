@@ -120,7 +120,7 @@ end
 
 function tmux_create_session
 	# Search common paths first, then all visited directories
-	if not set target_path (ls ~/dev ~/dev/others ~/pentests | fzf)
+	if not set target_path (find ~/dev ~/dev/others ~/pentests -mindepth 1 -maxdepth 1 -type d  | fzf)
 		if not set target_path (zoxide query -i)
 			return
 		end
