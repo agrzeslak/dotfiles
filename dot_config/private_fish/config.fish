@@ -234,7 +234,6 @@ set FISH_CLIPBOARD_CMD "cat"
 # Can also run tmux -u, but this seems better.
 set -gx LC_ALL en_US.UTF-8
 
-
 # Make Java apps work with some window managers like BSPWM. Non-reparenting WMs
 # are hardcoded and so if you're not on the list then it won't work. Here we
 # specifically say that we are a non-reparenting WM.
@@ -243,6 +242,9 @@ set -gx _JAVA_AWT_WM_NONREPARENTING 1
 
 # Used by commands such as sudoedit to determine which editor to use.
 set -gx EDITOR "/usr/bin/nvim"
+
+# Used by AWS CLI to determine which browser to use
+set -gx BROWSER "/usr/bin/firefox-developer-edition"
 
 set -gx RUST_BACKTRACE 1
 
