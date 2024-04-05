@@ -55,60 +55,11 @@ if type -q zoxide
 	zoxide init --cmd j fish | source
 end
 
-function apass
-	if test (count $argv) -ne 1
-		pass $argv
-		return
-	end
-
-	asend (pass $argv[1] | head -n1)
-end
-
-function qrpass
-	if test (count $argv) -ne 1
-		pass $argv
-		return
-	end
-
-	qrsend (pass $argv[1] | head -n1)
-end
-
-function asend
-	if test (count $argv) -ne 1
-		echo "No argument given"
-		return
-	end
-
-	adb shell input text (echo $argv[1] | sed -e 's/ /%s/g' -e 's/\([#[()<>{}$|;&*\\~"\'`]\)/\\\\\1/g')
-end
-
-function qrsend
-	if test (count $argv) -ne 1
-		echo "No argument given"
-		return
-	end
-
-	qrencode -o - $argv[1] | feh --geometry 500x500 --auto-zoom -
-end
-
-function limit
-	numactl -C 0,1,2 $argv
-end
-
-function remote_alacritty
-	# https://gist.github.com/costis/5135502
-	set fn (mktemp)
-	infocmp alacritty > $fn
-	scp $fn $argv[1]":alacritty.ti"
-	ssh $argv[1] tic "alacritty.ti"
-	ssh $argv[1] rm "alacritty.ti"
-end
-
 # Type - to move up to top parent dir which is a repository
 function d
 	while test $PWD != "/"
 		if test -d .git
-				break
+			break
 		end
 		cd ..
 	end
@@ -142,9 +93,9 @@ function strip_ansi
 	mv $argv[1].tmp $argv[1]
 end
 
-function java_ui_scale
 # TODO: Programmatically apply this.
 # To make Java apps scale correctly on HiDPI displays.
+function java_ui_scale
 	if test (count $argv) -ne 1
 		echo "java_ui_scale <scale>"
 		return
@@ -250,19 +201,16 @@ set -gx RUST_BACKTRACE 1
 
 pyenv init - | source
 
-# FIXME: Missing the fzf_key_bindings file (symlink to a file which doesn't exist on jonhoo's repo) file.
+# https://github.com/fish-shell/fish-shell/issues/7152#issuecomment-663575001
 function fish_user_key_bindings
-	bind \cz 'fg>/dev/null ^/dev/null'
-	if functions -q fzf_key_bindings
-		fzf_key_bindings
-	end
+	bind \cz 'fg 2>/dev/null; commandline -f repaint'  # C-z to fg
 	bind ! bind_bang
 	bind '$' bind_dollar
 end
 
 function fish_prompt
 	set_color blue
-	echo -n (hostname)
+	echo -n (hostnamectl hostname)
 	if [ $PWD != $HOME ]
 		set_color brblack
 		echo -n ':'
