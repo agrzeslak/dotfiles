@@ -150,10 +150,6 @@ function tmux_switch_session
 	tmux switch-client -t $chosen_session
 end
 
-if test -e ~/.config/fish/work.fish
-	builtin source ~/.config/fish/work.fish
-end
-
 # Fish git prompt
 set __fish_git_prompt_showuntrackedfiles 'yes'
 set __fish_git_prompt_showdirtystate 'yes'
@@ -226,3 +222,8 @@ end
 
 function fish_greeting
 end
+
+if test -e ~/.config/fish/work.fish
+	builtin source ~/.config/fish/work.fish
+end
+
