@@ -36,7 +36,7 @@ if status --is-interactive
 		# Always attach to the same session rather than creating a new
 		# one when a new terminal is opened. This is almost always
 		# what's intended.
-		exec tmux new-session -As "0"
+		exec tmux new-session -As "main"
 	end
 end
 
@@ -197,9 +197,10 @@ set -gx RUST_BACKTRACE 1
 
 pyenv init - | source
 
+# C-z to fg
 # https://github.com/fish-shell/fish-shell/issues/7152#issuecomment-663575001
 function fish_user_key_bindings
-	bind \cz 'fg 2>/dev/null; commandline -f repaint'  # C-z to fg
+	bind \cz 'fg 2>/dev/null; commandline -f repaint'
 	bind ! bind_bang
 	bind '$' bind_dollar
 end
@@ -226,4 +227,3 @@ end
 if test -e ~/.config/fish/work.fish
 	builtin source ~/.config/fish/work.fish
 end
-
