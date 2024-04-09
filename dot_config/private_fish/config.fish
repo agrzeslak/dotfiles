@@ -18,14 +18,14 @@ abbr -a ct 'cargo t'
 abbr -a amz 'env AWS_SECRET_ACCESS_KEY=(pass www/aws-secret-key | head -n1)'
 abbr -a ais "aws ec2 describe-instances | jq '.Reservations[] | .Instances[] | {iid: .InstanceId, type: .InstanceType, key:.KeyName, state:.State.Name, host:.PublicDnsName}'"
 abbr -a v 'source env/bin/activate.fish'
-abbr -a ks 'keybase chat send'
-abbr -a kr 'keybase chat read'
-abbr -a kl 'keybase chat list'
 abbr -a pm pulsemixer
 abbr -a bt bluetoothctl
 abbr -a cm chezmoi
-abbr -a t tmux_switch_session
+
 complete --command paru --wraps pacman
+
+# Enable AWS CLI autocompletion: github.com/aws/aws-cli/issues/1079
+complete --command aws --no-files --arguments '(begin; set --local --export COMP_SHELL fish; set --local --export COMP_LINE (commandline); aws_completer | sed \'s/ $//\'; end)'
 
 if status --is-interactive
 	if test -d ~/dev/others/base16/templates/fish-shell
