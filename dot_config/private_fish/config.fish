@@ -150,6 +150,10 @@ function tmux_switch_session
 	tmux switch-client -t $chosen_session
 end
 
+function switch_aws_profile
+	set -Ux AWS_PROFILE (cat ~/.aws/config | grep "\[profile" | string sub --start 10 --end -1 | fzf)
+end
+
 # Fish git prompt
 set __fish_git_prompt_showuntrackedfiles 'yes'
 set __fish_git_prompt_showdirtystate 'yes'
