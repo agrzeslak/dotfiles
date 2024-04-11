@@ -32,7 +32,13 @@ vim.api.nvim_create_autocmd("Filetype", {
 	command = "setlocal textwidth=72 colorcolumn=73",
 })
 
--- PowerShell https://poshcode.gitbook.io/powershell-practice-and-style/style-guide/code-layout-and-formatting#Capitalization-Conventions
+-- Enable spellchecking
+vim.api.nvim_create_autocmd("Filetype", {
+	pattern = { "gitcommit", "markdown", "mail", "text" },
+	command = "setlocal spell",
+})
+
+-- PowerShell https://poshcode.gitbook.io/powershell-practice-and-style/style-guide/code-layout-and-formatting
 vim.api.nvim_create_autocmd("Filetype", {
 	pattern = "ps1",
 	command = "setlocal textwidth=115 colorcolumn=116",
