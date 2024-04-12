@@ -40,11 +40,11 @@ return {
 				--   - priority
 				--   - max_item_count
 				sources = cmp.config.sources({
-					{ name = "nvim_lua" },
 					{ name = "nvim_lsp" },
-					{ name = "luasnip" },
+					{ name = "nvim_lua" },
 				}, {
 					{ name = "path" },
+					{ name = "luasnip" },
 					{ name = "buffer", keyword_length = 5 },
 				}),
 				experimental = {
@@ -52,12 +52,34 @@ return {
 				},
 			})
 
+			-- Completion from the buffer for when forward searching
+			cmp.setup.cmdline("/", {
+				mapping = cmp.mapping.preset.cmdline(),
+				sources = {
+					{ name = "buffer" },
+				},
+			})
+
+			-- Completion from the buffer for when reverse searching
+			cmp.setup.cmdline("?", {
+				mapping = cmp.mapping.preset.cmdline(),
+				sources = {
+					{ name = "buffer" },
+				},
+			})
+
 			-- Enable completion in the command line
 			cmp.setup.cmdline(":", {
+				mapping = cmp.mapping.preset.cmdline(),
 				sources = cmp.config.sources({
 					{ name = "path" },
 				}, {
-					{ name = "cmdline" },
+					{
+						name = "cmdline",
+						option = {
+							ignore_cmds = { "Man", "!" },
+						},
+					},
 				}),
 			})
 		end,
