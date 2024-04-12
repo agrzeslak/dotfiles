@@ -205,6 +205,9 @@ pyenv init - | source
 # https://github.com/fish-shell/fish-shell/issues/7152#issuecomment-663575001
 function fish_user_key_bindings
 	bind \cz 'fg 2>/dev/null; commandline -f repaint'
+	if functions -q fzf_key_bindings
+		fzf_key_bindings
+	end
 	bind ! bind_bang
 	bind '$' bind_dollar
 end
