@@ -13,6 +13,9 @@ set("n", "<C-h>", "<cmd>nohlsearch<cr>")
 set("n", "<leader><leader>", "<c-^>")
 set("n", "<leader>,", ":set invlist<cr>")
 
+-- Save as root
+set("c", "w!!", ":w !sudo tee % > /dev/null")
+
 -- Center search results
 set("n", "n", "nzz", { silent = true })
 set("n", "N", "Nzz", { silent = true })
