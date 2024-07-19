@@ -154,6 +154,21 @@ function switch_aws_profile
 	set -Ux AWS_PROFILE (cat ~/.aws/config | grep "\[profile" | string sub --start 10 --end -1 | fzf)
 end
 
+function powershell_encode
+	if test (count $argv) -ne 1
+		echo "powershell_encode <string|file|->"
+		return
+	end
+	if test $argv[1] = "-"
+		read line
+		echo $line | iconv -t utf-16le | base64 -w 0
+	else if test -e $argv[1]
+		cat $argv[1] | iconv -t utf-16le | base64 -w 0
+	else
+		echo $argv[1] | iconv -t utf-16le | base64 -w 0
+	end
+end
+
 # Fish git prompt
 set __fish_git_prompt_showuntrackedfiles 'yes'
 set __fish_git_prompt_showdirtystate 'yes'
