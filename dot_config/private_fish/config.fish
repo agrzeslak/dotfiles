@@ -186,7 +186,7 @@ function powershell_encode
 	end
 
 	echo -n "powershell -enc \""
-	for i in (seq 1 $split_number)
+	for i in (seq 1 (math $split_number - 1))
 		echo -n "\$a$i"
 	end
 	echo "\""
