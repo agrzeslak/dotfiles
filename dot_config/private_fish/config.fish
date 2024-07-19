@@ -155,17 +155,41 @@ function switch_aws_profile
 end
 
 function powershell_encode
-	if test (count $argv) -ne 1
-		echo "powershell_encode <string|file|->"
+	if test (count $argv) -lt 1
+		echo "powershell_encode <string|file|-> [chars per split]"
 		return
 	end
+
 	if test $argv[1] = "-"
 		read line
-		echo $line | iconv -t utf-16le | base64 -w 0
+		set output ($line | iconv -t utf-16le | base64 -w 0)
 	else if test -e $argv[1]
-		cat $argv[1] | iconv -t utf-16le | base64 -w 0
+		set output (cat $argv[1] | iconv -t utf-16le | base64 -w 0)
 	else
-		echo $argv[1] | iconv -t utf-16le | base64 -w 0
+		set output (echo $argv[1] | iconv -t utf-16le | base64 -w 0)
+	end
+
+	set length (string length $output)
+	set split_legnth $argv[2]
+	if test (count $argv) -lt 2; or test $split_legnth -ge $length
+		echo "powershell -enc $output"
+		return
+	end
+
+	set num_splits (math "ceil($length / $split_legnth)")
+	echo -n "powershell -enc \""
+	for i in (seq 1 $num_splits)
+		echo -n "\$a$i"
+	end
+	echo "\""
+
+	set split_start 1
+	set i 1
+	while test $split_start -le $length
+		set split (string sub -s $split_start -l $split_legnth $output)
+		echo \$a$i=\"$split\"
+		set split_start (math $split_start + $argv[2])
+		set i (math $i + 1)
 	end
 end
 
