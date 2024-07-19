@@ -176,21 +176,20 @@ function powershell_encode
 		return
 	end
 
-	set num_splits (math "ceil($length / $split_legnth)")
+	set split_start 1
+	set split_number 1
+	while test $split_start -le $length
+		set split (string sub -s $split_start -l $split_legnth $output)
+		echo \$a$split_number=\"$split\"
+		set split_start (math $split_start + $argv[2])
+		set split_number (math $split_number + 1)
+	end
+
 	echo -n "powershell -enc \""
-	for i in (seq 1 $num_splits)
+	for i in (seq 1 $split_number)
 		echo -n "\$a$i"
 	end
 	echo "\""
-
-	set split_start 1
-	set i 1
-	while test $split_start -le $length
-		set split (string sub -s $split_start -l $split_legnth $output)
-		echo \$a$i=\"$split\"
-		set split_start (math $split_start + $argv[2])
-		set i (math $i + 1)
-	end
 end
 
 # Fish git prompt
