@@ -40,6 +40,9 @@ set("n", "*", "m`:keepjumps normal! *``<cr>")
 set("n", "gp", "<cmd>bp<cr>")
 set("n", "gn", "<cmd>bn<cr>")
 
+-- Make gf create the file under the cursor if it doesn't exist
+set("n", "gf", ":e <cfile><cr>")
+
 -- Telescope
 -- set("n", "<leader>f", "<cmd>lua require'telescope.builtin'.find_files(require('telescope.themes').get_ivy({}))<cr>", opts)
 -- TODO: Switch back to Telescope when proximity sort is implemented. As of now
