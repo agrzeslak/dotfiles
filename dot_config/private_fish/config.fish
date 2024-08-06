@@ -192,6 +192,40 @@ function powershell_encode
 	echo "\""
 end
 
+function nxc_iter_user_hashes
+	if test (count $argv) -lt 2
+		echo "nxc_iter_users <nxc args> <user hashes file>"
+		echo "    Lines should be in the form of <user>:<hash>"
+		return
+	end
+
+	set nxc_args $argv[1..-2]
+	for line in (cat $argv[-1])
+		set split (string split ':' $line)
+		set user $split[1]
+		set hash $split[2]
+		nxc $nxc_args -u $user -H $hash
+	end
+end
+complete --command nxc_iter_user_hashes --wraps nxc
+
+function nxc_iter_user_passwords
+	if test (count $argv) -lt 2
+		echo "nxc_iter_users <nxc args> <user passwords file>"
+		echo "    Lines should be in the form of [<domain>\]<user>:<hash>"
+		return
+	end
+
+	set nxc_args $argv[1..-2]
+	for line in (cat $argv[-1])
+		set split (string split ':' $line)
+		set user $split[1]
+		set password $split[2]
+		nxc $nxc_args -u $user -p $password
+	end
+end
+complete --command nxc_iter_user_passwords --wraps nxc
+
 # Fish git prompt
 set __fish_git_prompt_showuntrackedfiles 'yes'
 set __fish_git_prompt_showdirtystate 'yes'
