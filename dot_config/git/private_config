@@ -9,7 +9,8 @@
 	ui = true
 
 [core]
-	autocrlf = input
+	autocrlf = false
+	eol = lf
 	safecrlf = true
 
 [merge]
