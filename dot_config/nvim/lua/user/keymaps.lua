@@ -44,79 +44,80 @@ set("n", "gn", "<cmd>bn<cr>")
 set("n", "gf", ":e <cfile><cr>")
 
 -- Telescope
--- set("n", "<leader>f", "<cmd>lua require'telescope.builtin'.find_files(require('telescope.themes').get_ivy({}))<cr>", opts)
+-- set("n", "<leader>f", function() require'telescope.builtin'.find_files(require('telescope.themes').get_ivy({}))<cr>", opts)
 -- TODO: Switch back to Telescope when proximity sort is implemented. As of now
 --			 results are just slower and worse than this custom implementation
 --			 https://github.com/natecraddock/telescope-zf-native.nvim/issues/14.
 set("n", "<leader>f", "<cmd>Files<cr>", opts)
-set(
-	"n",
-	"<leader>/",
-	"<cmd>lua require'telescope.builtin'.live_grep(require('telescope.themes').get_ivy({}))<cr>",
-	opts
-)
-set("n", "<leader>;", "<cmd>lua require'telescope.builtin'.buffers(require('telescope.themes').get_ivy({}))<cr>", opts)
-set("n", "<leader>k", "<cmd>lua vim.lsp.buf.hover()<CR>", opts)
-set("n", "<leader>r", "<cmd>lua vim.lsp.buf.rename()<CR>", opts)
-set("n", "<leader>a", "<cmd>lua vim.lsp.buf.code_action()<CR>", opts)
-set("n", "<leader>e", "<cmd>lua vim.diagnostic.open_float()<CR>", opts)
-set("n", "<leader>q", "<cmd>lua vim.diagnostic.set_loclist()<CR>", opts)
-set("n", "<leader>t", "<cmd>lua vim.lsp.buf.format { async = true }<CR>", opts)
-set(
-	"n",
-	"<leader>s",
-	"<cmd>lua require'telescope.builtin'.lsp_document_symbols(require('telescope.themes').get_ivy({}))<cr>",
-	opts
-)
-set(
-	"n",
-	"<leader>S",
-	"<cmd>lua require'telescope.builtin'.lsp_workspace_symbols(require('telescope.themes').get_ivy({}))<cr>",
-	opts
-)
-set("n", "<leader>'", "<cmd>lua require'telescope.builtin'.resume(require('telescope.themes').get_ivy({}))<cr>", opts)
-set(
-	"n",
-	"<leader>g",
-	"<cmd>lua require'telescope.builtin'.diagnostics(require('telescope.themes').get_ivy({}))<cr>",
-	opts
-)
-set("n", "<leader>j", "<cmd>lua require'telescope.builtin'.jumplist(require('telescope.themes').get_ivy({}))<cr>", opts)
-set(
-	"n",
-	"<leader>*",
-	"<cmd>lua require'telescope.builtin'.grep_string(require('telescope.themes').get_ivy({}))<cr>",
-	opts
-)
+set("n", "<leader>/", function()
+	require("telescope.builtin").live_grep(require("telescope.themes").get_ivy({}))
+end, opts)
+set("n", "<leader>;", function()
+	require("telescope.builtin").buffers(require("telescope.themes").get_ivy({}))
+end, opts)
+set("n", "<leader>k", function()
+	vim.lsp.buf.hover()
+end, opts)
+set("n", "<leader>r", function()
+	vim.lsp.buf.rename()
+end, opts)
+set("n", "<leader>a", function()
+	vim.lsp.buf.code_action()
+end, opts)
+set("n", "<leader>e", function()
+	vim.diagnostic.open_float()
+end, opts)
+set("n", "<leader>q", function()
+	vim.diagnostic.set_loclist()
+end, opts)
+set("n", "<leader>t", function()
+	vim.lsp.buf.format({ async = true })
+end, opts)
+set("n", "<leader>s", function()
+	require("telescope.builtin").lsp_document_symbols(require("telescope.themes").get_ivy({}))
+end, opts)
+set("n", "<leader>S", function()
+	require("telescope.builtin").lsp_workspace_symbols(require("telescope.themes").get_ivy({}))
+end, opts)
+set("n", "<leader>'", function()
+	require("telescope.builtin").resume(require("telescope.themes").get_ivy({}))
+end, opts)
+set("n", "<leader>g", function()
+	require("telescope.builtin").diagnostics(require("telescope.themes").get_ivy({}))
+end, opts)
+set("n", "<leader>j", function()
+	require("telescope.builtin").jumplist(require("telescope.themes").get_ivy({}))
+end, opts)
+set("n", "<leader>*", function()
+	require("telescope.builtin").grep_string(require("telescope.themes").get_ivy({}))
+end, opts)
 set("n", "<leader>b", ":Gitsigns blame_line<cr>", opts)
-set("n", "gr", "<cmd>lua require'telescope.builtin'.lsp_references(require('telescope.themes').get_ivy({}))<cr>", opts)
-set("n", "gD", "<cmd>lua vim.lsp.buf.declaration()<CR>", opts)
-set("n", "gd", "<cmd>lua require'telescope.builtin'.lsp_definitions(require('telescope.themes').get_ivy({}))<cr>", opts)
-set(
-	"n",
-	"gi",
-	"<cmd>lua require'telescope.builtin'.lsp_implementations(require('telescope.themes').get_ivy({}))<cr>",
-	opts
-)
-set(
-	"n",
-	"gy",
-	"<cmd>lua require'telescope.builtin'.lsp_type_definitions(require('telescope.themes').get_ivy({}))<cr>",
-	opts
-)
-set("n", "[d", "<cmd>lua vim.diagnostic.goto_prev()<CR>", opts)
-set("n", "]d", "<cmd>lua vim.diagnostic.goto_next()<CR>", opts)
-set("n", "<C-k>", "<cmd>lua vim.lsp.buf.signature_help()<CR>", opts)
+set("n", "gr", function()
+	require("telescope.builtin").lsp_references(require("telescope.themes").get_ivy({}))
+end, opts)
+set("n", "gD", function()
+	vim.lsp.buf.declaration()
+end, opts)
+set("n", "gd", function()
+	require("telescope.builtin").lsp_definitions(require("telescope.themes").get_ivy({}))
+end, opts)
+set("n", "gi", function()
+	require("telescope.builtin").lsp_implementations(require("telescope.themes").get_ivy({}))
+end, opts)
+set("n", "gy", function()
+	require("telescope.builtin").lsp_type_definitions(require("telescope.themes").get_ivy({}))
+end, opts)
+set("n", "[d", function()
+	vim.diagnostic.goto_prev()
+end, opts)
+set("n", "]d", function()
+	vim.diagnostic.goto_next()
+end, opts)
+set("n", "<C-k>", function()
+	vim.lsp.buf.signature_help()
+end, opts)
 
 -- PopUp menu (right-click)
 vim.cmd([[
     aunmenu PopUp
-    anoremenu PopUp.Go\ To\ Definition          <cmd>lua require'telescope.builtin'.lsp_definitions(require('telescope.themes').get_ivy({}))<cr>
-    anoremenu PopUp.Go\ To\ References          <cmd>lua require'telescope.builtin'.lsp_references(require('telescope.themes').get_ivy({}))<cr>
-    anoremenu PopUp.Go\ To\ Declaration         <cmd>lua vim.lsp.buf.declaration()<CR>
-    anoremenu PopUp.Go\ To\ Implementations     <cmd>lua require'telescope.builtin'.lsp_implementations(require('telescope.themes').get_ivy({}))<cr>
-    anoremenu PopUp.Go\ To\ Type\ Definitions   <cmd>lua require'telescope.builtin'.lsp_type_definitions(require('telescope.themes').get_ivy({}))<cr>
-    anoremenu PopUp.Hover                       <cmd>lua vim.lsp.buf.hover()<CR>
-    anoremenu PopUp.Signature\ Help             <cmd>lua vim.lsp.buf.signature_help()<CR>
-    anoremenu PopUp.Rename                      <cmd>lua vim.lsp.buf.rename()<CR>
 ]])
