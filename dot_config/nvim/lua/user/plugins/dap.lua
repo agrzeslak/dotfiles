@@ -57,9 +57,20 @@ return {
 					dap.configurations.java = {
 						{
 							type = "java",
-							name = "Debug (launch)",
+							name = "Launch",
 							request = "launch",
 							program = "${file}",
+						},
+						{
+							type = "java",
+							name = "Attach",
+							request = "attach",
+							host = function()
+								return vim.fn.input("Hostname: ")
+							end,
+							port = function()
+								return tonumber(vim.fn.input("Port: "))
+							end,
 						},
 					}
 
