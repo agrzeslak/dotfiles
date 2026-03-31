@@ -17,10 +17,11 @@ abbr -a vimdiff 'nvim -d'
 abbr -a ct 'cargo t'
 abbr -a amz 'env AWS_SECRET_ACCESS_KEY=(pass www/aws-secret-key | head -n1)'
 abbr -a ais "aws ec2 describe-instances | jq '.Reservations[] | .Instances[] | {iid: .InstanceId, type: .InstanceType, key:.KeyName, state:.State.Name, host:.PublicDnsName}'"
-abbr -a v 'source env/bin/activate.fish'
 abbr -a pm pulsemixer
 abbr -a bt bluetoothctl
 abbr -a cm chezmoi
+abbr -a pset proxy_set
+abbr -a pu proxy_unset
 
 complete --command paru --wraps pacman
 
@@ -38,6 +39,11 @@ if status --is-interactive
 		# what's intended.
 		exec tmux new-session -As "main"
 	end
+end
+
+# Start/reuse ssh-agent via keychain and export env vars into fish
+if type -q keychain
+    keychain --quiet --eval ~/.ssh/id_ed25519_personal ~/.ssh/id_ed25519_work | source
 end
 
 if command -v eza > /dev/null
@@ -111,6 +117,20 @@ function ssh_via_socks
 	ssh -o ProxyCommand='nc --proxy-type socks5 --proxy '$argv[1]' --proxy-auth '$argv[2]':'$argv[3]' %h %p' $argv[4]
 end
 
+# Activate a venv in the current directory (common names)
+function v --description "Activate a Python venv (env/venv/.venv/.env)"
+    for d in env venv .venv .env
+        set -l f "$d/bin/activate.fish"
+        if test -f "$f"
+            source "$f"
+            return 0
+        end
+    end
+
+    echo "v: no activate.fish found in env/ venv/ .venv/ .env/" >&2
+    return 1
+end
+
 function retry
 	while true;
 		eval $argv && break
@@ -120,7 +140,7 @@ end
 
 function tmux_create_session
 	# Search common paths first, then all visited directories
-	if not set target_path (find ~/dev ~/dev/others ~/pentests -mindepth 1 -maxdepth 1 -type d  | fzf)
+	if not set target_path (find /mnt/c/Users/andrzej/Documents/engagements /mnt/h/Documents/engagements ~/repos -mindepth 1 -maxdepth 1 -type d  | fzf)
 		if not set target_path (zoxide query -i)
 			return
 		end
@@ -255,7 +275,7 @@ set FISH_CLIPBOARD_CMD "cat"
 
 # Otherwise tmux doesn't print UTF-8 chars since it's set to C lang mode.
 # Can also run tmux -u, but this seems better.
-set -gx LC_ALL en_US.UTF-8
+set -gx LANG en_US.UTF-8
 
 # Make Java apps work with some window managers like BSPWM. Non-reparenting WMs
 # are hardcoded and so if you're not on the list then it won't work. Here we
@@ -287,14 +307,45 @@ end
 function fish_prompt
 	set_color blue
 	echo -n (hostnamectl hostname)
+
 	if [ $PWD != $HOME ]
 		set_color brblack
 		echo -n ':'
 		set_color yellow
 		echo -n (basename $PWD)
 	end
+
 	set_color green
 	printf '%s ' (__fish_git_prompt)
+
+	# >>> proxy indicator >>>
+	set -l proxy_all_set 0
+	set -l proxy_http_set 0
+	set -l proxy_https_set 0
+
+	if set -q all_proxy; or set -q ALL_PROXY
+		set proxy_all_set 1
+	end
+	if set -q http_proxy; or set -q HTTP_PROXY
+		set proxy_http_set 1
+	end
+	if set -q https_proxy; or set -q HTTPS_PROXY
+		set proxy_https_set 1
+	end
+
+	set -l proxy_count (math "$proxy_all_set + $proxy_http_set + $proxy_https_set")
+	if test $proxy_count -eq 3
+		set_color magenta
+		echo -n '[P] '
+	else if test $proxy_count -gt 0
+		set_color magenta
+		echo -n '[~P] '
+	else
+		set_color magenta
+		echo -n '[→] '
+	end
+	# <<< proxy indicator <<<
+
 	set_color red
 	echo -n '| '
 	set_color normal

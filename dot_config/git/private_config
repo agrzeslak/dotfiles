@@ -1,6 +1,9 @@
 [core]
 	editor = nvim
 	excludesFile = ~/.gitignore
+	autocrlf = input
+	eol = lf
+	safecrlf = true
 
 [ui "color"]
 	ui = always
@@ -8,12 +11,8 @@
 [color]
 	ui = true
 
-[core]
-	autocrlf = false
-	eol = lf
-	safecrlf = true
-
 [merge]
+	conflictStyle = zdiff3
 	tool = nvim -d
 
 [pull]
@@ -26,15 +25,20 @@
 	algorithm = histogram
 	indentHeuristic = true
 
-[gpg]
-	format = ssh
+[help]
+	autocorrect = prompt
 
-[gpg "ssh"]
+[protocol]
+	version = 2
 
-	program = /opt/1Password/op-ssh-sign
-
-[commit]
-	gpgsign = true
-
-[user]
-	signingkey = ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFlDUOc/hleO5T3M7QOQHbERQIoCqYsPN0PaS2sAkHJa
+[alias]
+	c = commit
+	s = status
+	st = status
+	lg = log --oneline
+	last = log -1 HEAD
+	f = push --force-with-lease
+	# https://stackoverflow.com/a/11688523/472927
+	ss = "!f() { git stash show stash^{/$*} -p; }; f"
+	sa = "!f() { git stash apply stash^{/$*}; }; f"
+	sl = stash list

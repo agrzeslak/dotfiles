@@ -1,8 +1,6 @@
 return {
 	"junegunn/fzf.vim",
-	dependencies = {
-		{ "junegunn/fzf", dir = "~/.fzf", build = "./install --all" },
-	},
+	dependencies = { "junegunn/fzf", build = "./install --bin" },
 	build = "cargo install proximity-sort",
 	config = function()
 		-- stop putting a giant window over my editor

@@ -41,7 +41,7 @@ vim.api.nvim_create_autocmd("Filetype", {
 -- Markdown uses spaces instead of tabs
 vim.api.nvim_create_autocmd("Filetype", {
 	pattern = "markdown",
-	command = "setlocal expandtab",
+	command = "setlocal expandtab textwidth=100 colorcolumn=101",
 })
 
 -- PowerShell https://poshcode.gitbook.io/powershell-practice-and-style/style-guide/code-layout-and-formatting
