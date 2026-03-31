@@ -1,0 +1,43 @@
+model = "gpt-5.4"
+model_reasoning_effort = "high"
+personality = "pragmatic"
+plan_mode_reasoning_effort = "high"
+[projects."/home/andrzej/repos/windows-baseline-collector"]
+trust_level = "trusted"
+
+[projects."/home/andrzej/repos/winmap"]
+trust_level = "trusted"
+
+[projects."/home/andrzej/repos/arsenal"]
+trust_level = "trusted"
+
+[projects."/home/andrzej/repos/couples-quiz"]
+trust_level = "trusted"
+
+[projects."/mnt/c/Users/andrzej/Documents/engagements/dnb-140-lm-fm-endpoint/lm-output/collector"]
+trust_level = "trusted"
+
+[projects."/mnt/c/Users/andrzej/Documents/engagements/spense/ec/spense-main"]
+trust_level = "trusted"
+
+[projects."/mnt/c/Users/andrzej/Documents/engagements/spense"]
+trust_level = "trusted"
+
+[projects."/mnt/c/Users/andrzej/Documents/engagements/fremtind"]
+trust_level = "trusted"
+
+[projects."/home/andrzej/repos/fart"]
+trust_level = "trusted"
+
+[notice]
+hide_rate_limit_model_nudge = true
+
+[notice.model_migrations]
+"gpt-5.2" = "gpt-5.2-codex"
+"gpt-5.1-codex-mini" = "gpt-5.2-codex"
+
+[shell_environment_policy]
+inherit = "all"
+
+[tui]
+status_line = ["model-with-reasoning", "git-branch", "five-hour-limit", "weekly-limit", "context-remaining"]
