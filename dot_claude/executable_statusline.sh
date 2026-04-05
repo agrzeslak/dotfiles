@@ -8,6 +8,7 @@ WEEK=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty')
 
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
+ORANGE='\033[0;38;5;208m'
 RED='\033[0;31m'
 RESET='\033[0m'
 
@@ -52,9 +53,11 @@ fi
 colorize() {
   local val="$1"
   local pct="$2"
-  if [ "$(printf '%.0f' "$pct")" -ge 95 ] 2>/dev/null; then
+  if [ "$(printf '%.0f' "$pct")" -ge 90 ] 2>/dev/null; then
     printf "${RED}%s${RESET}" "$val"
   elif [ "$(printf '%.0f' "$pct")" -ge 80 ] 2>/dev/null; then
+    printf "${ORANGE}%s${RESET}" "$val"
+  elif [ "$(printf '%.0f' "$pct")" -ge 70 ] 2>/dev/null; then
     printf "${YELLOW}%s${RESET}" "$val"
   else
     printf "%s" "$val"
@@ -70,3 +73,4 @@ OUT="$MODEL"
 [ -n "$CTX"        ] && OUT="$OUT · $(colorize "ctx $(printf '%.0f' "$CTX")%" "$CTX")"
 
 echo -e "$OUT"
+
