@@ -37,20 +37,39 @@ set -l SOURCE_SKILLS "$SCRIPT_DIR/skills"
 function report
     set -l status_word $argv[1]
     set -l message $argv[2]
+
+    # Keep bracketed status width fixed at 11 chars inside the brackets.
+    # "Succeeded" is 9 chars, so:
+    #   [Succeeded]
+    #   [  Skipped]
+    #   [   Failed]
     set -l label ""
 
     switch $status_word
         case Succeeded
             set label "[Succeeded]"
-            echo "$GREEN$label$RESET - $message"
         case Skipped
             set label "[  Skipped]"
-            echo "$YELLOW$label$RESET - $message"
         case Failed
             set label "[   Failed]"
-            echo "$RED$label$RESET - $message"
         case '*'
-            echo "[$status_word] - $message"
+            set label "[$status_word]"
+    end
+
+    # Only emit ANSI color if writing to a terminal.
+    if isatty stdout
+        switch $status_word
+            case Succeeded
+                printf "%s%s%s - %s\n" (set_color green) "$label" (set_color normal) "$message"
+            case Skipped
+                printf "%s%s%s - %s\n" (set_color yellow) "$label" (set_color normal) "$message"
+            case Failed
+                printf "%s%s%s - %s\n" (set_color red) "$label" (set_color normal) "$message"
+            case '*'
+                printf "%s - %s\n" "$label" "$message"
+        end
+    else
+        printf "%s - %s\n" "$label" "$message"
     end
 end
 
