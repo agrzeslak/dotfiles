@@ -22,13 +22,14 @@ Produce these sections in this exact order:
 
 1. `# <Concise Finding Name> - [<severity>]`
 2. `## Category`
-3. `## Glossary`
-4. `## Correct State`
-5. `## Current State`
-6. `## Attack Paths`
-7. `## Recommendations`
-8. `## Gaps and Questions`
-9. `## Consistency Notes`
+3. `## Summary`
+4. `## Glossary`
+5. `## Correct State`
+6. `## Current State`
+7. `## Attack Paths`
+8. `## Recommendations`
+9. `## Gaps and Questions`
+10. `## Consistency Notes`
 
 Severity must be exactly one of: `0-Informational`, `1-Low`, `2-Medium`, `3-High`, `4-Critical`.
 
@@ -93,6 +94,20 @@ This is the most important rule and the one that distinguishes this skill from a
 - If two claims need overlapping context, both claims get their own copy of that context, tailored to what each one specifically needs.
 - The author will deduplicate when writing the final draft. The skill must not.
 
+## The skim layer
+
+The claim headlines carry the narrative. Every claim's bolded statement must be a complete declarative sentence that, when read in sequence with the other claim headlines in its section, forms a coherent story the reader can follow *without opening any of the nested context*.
+
+This is the single rule that prevents the document from reading as a wall of disconnected cards. It has real consequences for how claims are phrased:
+
+- **Every claim has two reading modes by design.** Skim mode: read only the bolded headline and understand the conclusion. Verify mode: read the nested context to see the proof and the surrounding mechanics. Both modes must work independently.
+- **Headlines are full sentences, not labels.** Write `The auth middleware verifies the JWT signature but never reads the role claim from the payload` — not `JWT role claim check`. Labels force the reader to open the card to learn anything, which defeats the skim layer.
+- **Headlines within a section must be orderable into a narrative.** When drafting a section, arrange the claims so that reading only their headlines top-to-bottom produces a coherent story. If two adjacent headlines could be swapped without changing the story, the story is too thin and either the claims themselves or their phrasing need work.
+- **If a claim's headline cannot stand alone without the nested context, rewrite the headline, not the context.** Moving explanatory material up into the headline is fine. Making the headline dependent on the context beneath it is not.
+- **Skim-mode coverage matters.** A reader who only reads the bolded lines across Correct State, Current State, Attack Paths, and Recommendations should come away with the finding's full story: what should be true, what is true, how that is exploitable, and what to do about it. If any of those four narrative beats goes missing at the headline level, the skim layer is incomplete.
+
+The final consistency pass verifies that the skim layer actually holds.
+
 ## Section requirements
 
 ### Title line
@@ -104,6 +119,13 @@ This is the most important rule and the one that distinguishes this skill from a
 - State whether the finding is web application or infrastructure related.
 - Provide one best-fit category from the approved lists below.
 - Add a second category only when one would be materially misleading on its own. Do not pad with every plausible mapping.
+
+### Summary
+- A single paragraph of plain prose, typically three to five sentences, giving the reader a 30-second orientation before they read the body.
+- State, in order: what the issue is, what is wrong with the tested system, what the realistic impact is, and what direction the remediation takes.
+- Do not enumerate every piece of evidence, list every recommendation, or try to substitute for the body. This is the elevator pitch, not a table of contents.
+- Draft the Summary *after* the body sections are written, so it reflects what the body actually shows.
+- The Summary is duplicative with content below; that is intentional. The final consistency pass verifies it does not contradict any claim.
 
 ### Glossary
 - A short list of terms used elsewhere in this finding that a technical reader may not know.
@@ -157,16 +179,18 @@ This is the most important rule and the one that distinguishes this skill from a
 3. **Classify** the finding as web application or infrastructure related and pick the best-fit category from the approved lists.
 4. **Choose a severity** from the allowed values.
 5. **Draft the claim sections** in this order: Correct State, Current State, Attack Paths, Recommendations. While drafting:
+   - Write each claim's headline as a complete declarative sentence that stands on its own.
+   - Order claims within each section so concepts are introduced before they are used, and so the bolded headlines read in sequence form a coherent narrative.
    - Inline every concept explanation each claim needs.
    - Inline every evidence excerpt.
    - Cite sources inline at the point of every claim.
-   - Order claims within each section so concepts are introduced before they are used.
    - Note any gaps as you go, so you can collect them later.
    - Do not write any internal cross-references and do not number claims.
 6. **Derive the Glossary** from terms that recur across the drafted claims or that benefit from a single canonical definition.
-7. **Collect Gaps and Questions** the author still needs to resolve.
-8. **Run the consistency pass** (see below) and write the Consistency Notes section based on its results.
-9. **Finalize the title** so it accurately reflects the body.
+7. **Draft the Summary** as a single orientation paragraph reflecting what the body now shows.
+8. **Collect Gaps and Questions** the author still needs to resolve.
+9. **Run the consistency pass** (see below) and write the Consistency Notes section based on its results.
+10. **Finalize the title** so it accurately reflects the body.
 
 ## Consistency pass
 
@@ -174,6 +198,8 @@ Run this as the *last* step, after every other section is drafted. Its purpose i
 
 Walk this checklist explicitly:
 
+- **Summary–body consistency.** Does anything in the Summary contradict a claim in the body? If yes, fix the side with the weaker source. The Summary is duplicative on purpose, but it must not disagree with the claims it is summarizing.
+- **Skim-layer coherence.** Read only the bolded claim headlines in each section, top to bottom. Do they form a coherent narrative on their own? If a section reads as a disjointed list at the headline level, rewrite the headlines (not the bodies) until it does not. Also check coverage: do the headlines across Correct State, Current State, Attack Paths, and Recommendations, read alone, convey what should be true, what is true, how it is exploitable, and what to do about it?
 - **Definitional consistency.** Do all inline explanations of each concept agree with each other and with the Glossary entry, if any?
 - **Technical claim consistency.** Do all references to versions, defaults, protocol behavior, and vendor-specific details agree across claims?
 - **Severity and impact consistency.** Do Current State, Attack Paths, and Recommendations agree on how serious this finding is and what it allows an attacker to do?
@@ -276,6 +302,8 @@ Before finalizing, verify that the dossier:
 
 - follows the required section order
 - uses one of the allowed severity values and a category from the approved lists
+- includes a Summary that orients the reader in three to five sentences without contradicting any claim in the body
+- has claim headlines that are complete declarative sentences and read as a coherent narrative when skimmed alone in section order
 - contains no internal cross-references between claims and no claim numbering
 - has at least one inline source on every claim
 - inlines code excerpts, transcripts, and concept explanations rather than referring out to other parts of the document
