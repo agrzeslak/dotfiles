@@ -67,6 +67,24 @@ colorize() {
     printf "%s" "$val"
   fi
 }
+# Format a non-negative duration in seconds as the two coarsest non-zero units:
+# weekly windows show "Xd Yh", multi-hour windows show "Xh Ym", and anything
+# under an hour collapses to just "Ym". Shared by the rate-limit reset labels
+# and the peak/off-peak indicator so both read consistently.
+format_remaining() {
+  local remaining="$1"
+  local days hours mins
+  days=$((remaining / 86400))
+  hours=$(((remaining % 86400) / 3600))
+  mins=$(((remaining % 3600) / 60))
+  if [ "$days" -gt 0 ]; then
+    printf '%dd %dh' "$days" "$hours"
+  elif [ "$hours" -gt 0 ]; then
+    printf '%dh %dm' "$hours" "$mins"
+  else
+    printf '%dm' "$mins"
+  fi
+}
 # Format a rate-limit field as "<prefix> <pct>% (<time remaining>)".
 # Only the "<prefix> <pct>%" head is colour-graded; the parenthesised
 # remainder is italicised but deliberately left uncoloured so the
@@ -86,44 +104,48 @@ limit_label() {
     now_epoch=$(date +%s)
     remaining=$((reset - now_epoch))
     if [ "$remaining" -gt 0 ]; then
-      # Pick the two coarsest non-zero units so the label stays compact:
-      # weekly windows show "Xd Yh", multi-hour windows show "Xh Ym",
-      # and anything under an hour collapses to just "Ym".
-      local days hours mins remaining_str
-      days=$((remaining / 86400))
-      hours=$(((remaining % 86400) / 3600))
-      mins=$(((remaining % 3600) / 60))
-      if [ "$days" -gt 0 ]; then
-        remaining_str="${days}d ${hours}h"
-      elif [ "$hours" -gt 0 ]; then
-        remaining_str="${hours}h ${mins}m"
-      else
-        remaining_str="${mins}m"
-      fi
-      suffix=" ${ITALIC}(${remaining_str})${NOITALIC}"
+      suffix=" ${ITALIC}($(format_remaining "$remaining"))${NOITALIC}"
     fi
   fi
   printf '%s%s' "$head" "$suffix"
 }
-# Peak hours: 8 AM–2 PM ET (13:00–19:00 UTC), weekdays only
+# Peak hours: 8 AM–2 PM ET (13:00–19:00 UTC), weekdays only.
+# Resolve the next peak boundary as an epoch so the remaining time can be
+# rendered through the same format_remaining helper the reset labels use.
 HOUR_UTC=$(date -u +%H)
 DOW=$(date -u +%u)  # 1=Mon … 7=Sun
+NOW_EPOCH=$(date +%s)
 if [ "$DOW" -le 5 ] && [ "$HOUR_UTC" -ge 13 ] && [ "$HOUR_UTC" -lt 19 ]; then
-  END_TIME=$(date -d '19:00 UTC' +%H:%M 2>/dev/null || date -jf "%H:%M %Z" "19:00 UTC" +%H:%M 2>/dev/null)
-  PEAK_INDICATOR=" · ${RED}peak${RESET} ${ITALIC}(until ${END_TIME})${NOITALIC}"
+  # Currently in peak — the next boundary is today's 19:00 UTC end.
+  TARGET_EPOCH=$(date -d '19:00 UTC' +%s 2>/dev/null \
+              || date -jf "%H:%M %Z" "19:00 UTC" +%s 2>/dev/null)
+  PEAK_LABEL="${RED}peak${RESET}"
 else
   if [ "$DOW" -le 5 ] && [ "$HOUR_UTC" -lt 13 ]; then
-    END_TIME=$(date -d '13:00 UTC' +%H:%M 2>/dev/null || date -jf "%H:%M %Z" "13:00 UTC" +%H:%M 2>/dev/null)
+    # Weekday before peak — next boundary is today's 13:00 UTC start.
+    TARGET_EPOCH=$(date -d '13:00 UTC' +%s 2>/dev/null \
+                || date -jf "%H:%M %Z" "13:00 UTC" +%s 2>/dev/null)
   elif [ "$DOW" -le 4 ]; then
-    END_TIME=$(date -d 'tomorrow 13:00 UTC' +"%a %H:%M" 2>/dev/null \
-            || date -v+1d -jf "%H:%M %Z" "13:00 UTC" +"%a %H:%M" 2>/dev/null)
+    # Mon–Thu after peak — next boundary is tomorrow's 13:00 UTC start.
+    TARGET_EPOCH=$(date -d 'tomorrow 13:00 UTC' +%s 2>/dev/null \
+                || date -v+1d -jf "%H:%M %Z" "13:00 UTC" +%s 2>/dev/null)
   else
+    # Fri (post-peak), Sat, or Sun — skip ahead to Monday's 13:00 UTC start.
     DAYS_UNTIL_MON=$(( (8 - DOW) % 7 ))
     [ "$DAYS_UNTIL_MON" -eq 0 ] && DAYS_UNTIL_MON=7
-    END_TIME=$(date -d "+${DAYS_UNTIL_MON} days 13:00 UTC" +"%a %H:%M" 2>/dev/null \
-            || date -v+${DAYS_UNTIL_MON}d -jf "%H:%M %Z" "13:00 UTC" +"%a %H:%M" 2>/dev/null)
+    TARGET_EPOCH=$(date -d "+${DAYS_UNTIL_MON} days 13:00 UTC" +%s 2>/dev/null \
+                || date -v+${DAYS_UNTIL_MON}d -jf "%H:%M %Z" "13:00 UTC" +%s 2>/dev/null)
   fi
-  PEAK_INDICATOR=" · ${GREEN}off peak${RESET} ${ITALIC}(until ${END_TIME})${NOITALIC}"
+  PEAK_LABEL="${GREEN}off peak${RESET}"
+fi
+# If both date invocations failed we drop the parenthesised remainder rather
+# than emitting a broken "()" so the label still renders cleanly.
+PEAK_INDICATOR=" · ${PEAK_LABEL}"
+if [[ "$TARGET_EPOCH" =~ ^[0-9]+$ ]]; then
+  REMAINING=$((TARGET_EPOCH - NOW_EPOCH))
+  if [ "$REMAINING" -gt 0 ]; then
+    PEAK_INDICATOR="${PEAK_INDICATOR} ${ITALIC}($(format_remaining "$REMAINING"))${NOITALIC}"
+  fi
 fi
 # Format each field
 OUT="$MODEL"
