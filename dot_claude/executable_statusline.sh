@@ -4,14 +4,17 @@ input=$(cat)
 MODEL=$(echo "$input" | jq -r '.model.display_name // "?"')
 CTX=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
 FIVE_H=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
-FIVE_H_RESET=$(echo "$input" | jq -r '.rate_limits.five_hour.reset_at // empty')
+FIVE_H_RESET=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty')
 WEEK=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty')
+WEEK_RESET=$(echo "$input" | jq -r '.rate_limits.seven_day.resets_at // empty')
 
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 ORANGE='\033[0;38;5;208m'
 RED='\033[0;31m'
 RESET='\033[0m'
+ITALIC='\033[3m'
+NOITALIC='\033[23m'
 
 # Git branch and summary from workspace dir
 DIR=$(echo "$input" | jq -r '.workspace.current_dir // empty')
@@ -64,24 +67,50 @@ colorize() {
     printf "%s" "$val"
   fi
 }
-# Format the 5h field with optional reset time
-five_h_label() {
-  local pct="$1"
-  local reset="$2"
-  local label="5h $(printf '%.0f' "$pct")%"
-  if [ -n "$reset" ]; then
-    local reset_local
-    reset_local=$(date -d "$reset" +%H:%M 2>/dev/null || date -jf "%Y-%m-%dT%H:%M:%SZ" "$reset" +%H:%M 2>/dev/null)
-    [ -n "$reset_local" ] && label="$label (until ${reset_local})"
+# Format a rate-limit field as "<prefix> <pct>% (<time remaining>)".
+# Only the "<prefix> <pct>%" head is colour-graded; the parenthesised
+# remainder is italicised but deliberately left uncoloured so the
+# percentage's severity stays the dominant visual signal.
+limit_label() {
+  local prefix="$1"
+  local pct="$2"
+  local reset="$3"
+  local head
+  head=$(colorize "$prefix $(printf '%.0f' "$pct")%" "$pct")
+  local suffix=""
+  # `resets_at` arrives as a Unix epoch integer, so we can use it directly.
+  # Guard with a numeric regex so a malformed value just hides the suffix
+  # rather than blowing up the arithmetic below.
+  if [[ "$reset" =~ ^[0-9]+$ ]]; then
+    local now_epoch remaining
+    now_epoch=$(date +%s)
+    remaining=$((reset - now_epoch))
+    if [ "$remaining" -gt 0 ]; then
+      # Pick the two coarsest non-zero units so the label stays compact:
+      # weekly windows show "Xd Yh", multi-hour windows show "Xh Ym",
+      # and anything under an hour collapses to just "Ym".
+      local days hours mins remaining_str
+      days=$((remaining / 86400))
+      hours=$(((remaining % 86400) / 3600))
+      mins=$(((remaining % 3600) / 60))
+      if [ "$days" -gt 0 ]; then
+        remaining_str="${days}d ${hours}h"
+      elif [ "$hours" -gt 0 ]; then
+        remaining_str="${hours}h ${mins}m"
+      else
+        remaining_str="${mins}m"
+      fi
+      suffix=" ${ITALIC}(${remaining_str})${NOITALIC}"
+    fi
   fi
-  colorize "$label" "$pct"
+  printf '%s%s' "$head" "$suffix"
 }
 # Peak hours: 8 AM–2 PM ET (13:00–19:00 UTC), weekdays only
 HOUR_UTC=$(date -u +%H)
 DOW=$(date -u +%u)  # 1=Mon … 7=Sun
 if [ "$DOW" -le 5 ] && [ "$HOUR_UTC" -ge 13 ] && [ "$HOUR_UTC" -lt 19 ]; then
   END_TIME=$(date -d '19:00 UTC' +%H:%M 2>/dev/null || date -jf "%H:%M %Z" "19:00 UTC" +%H:%M 2>/dev/null)
-  PEAK_INDICATOR=" · ${RED}peak${RESET} (until ${END_TIME})"
+  PEAK_INDICATOR=" · ${RED}peak${RESET} ${ITALIC}(until ${END_TIME})${NOITALIC}"
 else
   if [ "$DOW" -le 5 ] && [ "$HOUR_UTC" -lt 13 ]; then
     END_TIME=$(date -d '13:00 UTC' +%H:%M 2>/dev/null || date -jf "%H:%M %Z" "13:00 UTC" +%H:%M 2>/dev/null)
@@ -94,14 +123,14 @@ else
     END_TIME=$(date -d "+${DAYS_UNTIL_MON} days 13:00 UTC" +"%a %H:%M" 2>/dev/null \
             || date -v+${DAYS_UNTIL_MON}d -jf "%H:%M %Z" "13:00 UTC" +"%a %H:%M" 2>/dev/null)
   fi
-  PEAK_INDICATOR=" · ${GREEN}off peak${RESET} (until ${END_TIME})"
+  PEAK_INDICATOR=" · ${GREEN}off peak${RESET} ${ITALIC}(until ${END_TIME})${NOITALIC}"
 fi
 # Format each field
 OUT="$MODEL"
 [ -n "$BRANCH"     ] && OUT="$OUT · $BRANCH"
 [ -n "$GIT_STATUS" ] && OUT="$OUT · $GIT_STATUS"
-[ -n "$FIVE_H"     ] && OUT="$OUT · $(five_h_label "$FIVE_H" "$FIVE_H_RESET")"
-[ -n "$WEEK"       ] && OUT="$OUT · $(colorize "7d $(printf '%.0f' "$WEEK")%" "$WEEK")"
+[ -n "$FIVE_H"     ] && OUT="$OUT · $(limit_label "5h" "$FIVE_H" "$FIVE_H_RESET")"
+[ -n "$WEEK"       ] && OUT="$OUT · $(limit_label "7d" "$WEEK"  "$WEEK_RESET")"
 [ -n "$CTX"        ] && OUT="$OUT · $(colorize "ctx $(printf '%.0f' "$CTX")%" "$CTX")"
 OUT="$OUT$PEAK_INDICATOR"
 echo -e "$OUT"
