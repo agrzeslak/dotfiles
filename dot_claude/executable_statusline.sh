@@ -4,6 +4,7 @@ input=$(cat)
 MODEL=$(echo "$input" | jq -r '.model.display_name // "?"')
 CTX=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
 FIVE_H=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
+FIVE_H_RESET=$(echo "$input" | jq -r '.rate_limits.five_hour.reset_at // empty')
 WEEK=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty')
 
 GREEN='\033[0;32m'
@@ -63,14 +64,45 @@ colorize() {
     printf "%s" "$val"
   fi
 }
-
+# Format the 5h field with optional reset time
+five_h_label() {
+  local pct="$1"
+  local reset="$2"
+  local label="5h $(printf '%.0f' "$pct")%"
+  if [ -n "$reset" ]; then
+    local reset_local
+    reset_local=$(date -d "$reset" +%H:%M 2>/dev/null || date -jf "%Y-%m-%dT%H:%M:%SZ" "$reset" +%H:%M 2>/dev/null)
+    [ -n "$reset_local" ] && label="$label (until ${reset_local})"
+  fi
+  colorize "$label" "$pct"
+}
+# Peak hours: 8 AM–2 PM ET (13:00–19:00 UTC), weekdays only
+HOUR_UTC=$(date -u +%H)
+DOW=$(date -u +%u)  # 1=Mon … 7=Sun
+if [ "$DOW" -le 5 ] && [ "$HOUR_UTC" -ge 13 ] && [ "$HOUR_UTC" -lt 19 ]; then
+  END_TIME=$(date -d '19:00 UTC' +%H:%M 2>/dev/null || date -jf "%H:%M %Z" "19:00 UTC" +%H:%M 2>/dev/null)
+  PEAK_INDICATOR=" · ${RED}peak${RESET} (until ${END_TIME})"
+else
+  if [ "$DOW" -le 5 ] && [ "$HOUR_UTC" -lt 13 ]; then
+    END_TIME=$(date -d '13:00 UTC' +%H:%M 2>/dev/null || date -jf "%H:%M %Z" "13:00 UTC" +%H:%M 2>/dev/null)
+  elif [ "$DOW" -le 4 ]; then
+    END_TIME=$(date -d 'tomorrow 13:00 UTC' +"%a %H:%M" 2>/dev/null \
+            || date -v+1d -jf "%H:%M %Z" "13:00 UTC" +"%a %H:%M" 2>/dev/null)
+  else
+    DAYS_UNTIL_MON=$(( (8 - DOW) % 7 ))
+    [ "$DAYS_UNTIL_MON" -eq 0 ] && DAYS_UNTIL_MON=7
+    END_TIME=$(date -d "+${DAYS_UNTIL_MON} days 13:00 UTC" +"%a %H:%M" 2>/dev/null \
+            || date -v+${DAYS_UNTIL_MON}d -jf "%H:%M %Z" "13:00 UTC" +"%a %H:%M" 2>/dev/null)
+  fi
+  PEAK_INDICATOR=" · ${GREEN}off peak${RESET} (until ${END_TIME})"
+fi
 # Format each field
 OUT="$MODEL"
 [ -n "$BRANCH"     ] && OUT="$OUT · $BRANCH"
 [ -n "$GIT_STATUS" ] && OUT="$OUT · $GIT_STATUS"
-[ -n "$FIVE_H"     ] && OUT="$OUT · $(colorize "5h $(printf '%.0f' "$FIVE_H")%" "$FIVE_H")"
+[ -n "$FIVE_H"     ] && OUT="$OUT · $(five_h_label "$FIVE_H" "$FIVE_H_RESET")"
 [ -n "$WEEK"       ] && OUT="$OUT · $(colorize "7d $(printf '%.0f' "$WEEK")%" "$WEEK")"
 [ -n "$CTX"        ] && OUT="$OUT · $(colorize "ctx $(printf '%.0f' "$CTX")%" "$CTX")"
-
+OUT="$OUT$PEAK_INDICATOR"
 echo -e "$OUT"
 
