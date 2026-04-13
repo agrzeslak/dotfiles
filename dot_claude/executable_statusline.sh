@@ -12,6 +12,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 ORANGE='\033[0;38;5;208m'
 RED='\033[0;31m'
+BLUE='\033[0;94m'
 RESET='\033[0m'
 ITALIC='\033[3m'
 NOITALIC='\033[23m'
@@ -93,6 +94,7 @@ limit_label() {
   local prefix="$1"
   local pct="$2"
   local reset="$3"
+  local window_secs="$4"
   local head
   head=$(colorize "$prefix $(printf '%.0f' "$pct")%" "$pct")
   local suffix=""
@@ -104,7 +106,30 @@ limit_label() {
     now_epoch=$(date +%s)
     remaining=$((reset - now_epoch))
     if [ "$remaining" -gt 0 ]; then
-      suffix=" ${ITALIC}($(format_remaining "$remaining"))${NOITALIC}"
+      local formatted
+      formatted=$(format_remaining "$remaining")
+      # Color the time-remaining label by pace: the ratio of usage consumed
+      # to time elapsed within the window.  A pace of 1.0 means on-track;
+      # higher means burning faster than the window can sustain.
+      local pace_col
+      pace_col=$(awk -v pct="$pct" -v rem="$remaining" -v win="$window_secs" 'BEGIN {
+        elapsed = win - rem
+        if (elapsed <= 0 || win <= 0) { print "none"; exit }
+        pace = (pct / 100) / (elapsed / win)
+        if (pace >= 2.0) print "red"
+        else if (pace >= 1.5) print "orange"
+        else if (pace >= 1.2) print "yellow"
+        else if (pace >= 0.8) print "green"
+        else print "blue"
+      }')
+      case "$pace_col" in
+        red)    suffix=" ${RED}${ITALIC}(${formatted})${RESET}" ;;
+        orange) suffix=" ${ORANGE}${ITALIC}(${formatted})${RESET}" ;;
+        yellow) suffix=" ${YELLOW}${ITALIC}(${formatted})${RESET}" ;;
+        green)  suffix=" ${GREEN}${ITALIC}(${formatted})${RESET}" ;;
+        blue)   suffix=" ${BLUE}${ITALIC}(${formatted})${RESET}" ;;
+        *)      suffix=" ${ITALIC}(${formatted})${NOITALIC}" ;;
+      esac
     fi
   fi
   printf '%s%s' "$head" "$suffix"
@@ -151,8 +176,8 @@ fi
 OUT="$MODEL"
 [ -n "$BRANCH"     ] && OUT="$OUT · $BRANCH"
 [ -n "$GIT_STATUS" ] && OUT="$OUT · $GIT_STATUS"
-[ -n "$FIVE_H"     ] && OUT="$OUT · $(limit_label "5h" "$FIVE_H" "$FIVE_H_RESET")"
-[ -n "$WEEK"       ] && OUT="$OUT · $(limit_label "7d" "$WEEK"  "$WEEK_RESET")"
+[ -n "$FIVE_H"     ] && OUT="$OUT · $(limit_label "5h" "$FIVE_H" "$FIVE_H_RESET" 18000)"
+[ -n "$WEEK"       ] && OUT="$OUT · $(limit_label "7d" "$WEEK"  "$WEEK_RESET" 604800)"
 [ -n "$CTX"        ] && OUT="$OUT · $(colorize "ctx $(printf '%.0f' "$CTX")%" "$CTX")"
 OUT="$OUT$PEAK_INDICATOR"
 echo -e "$OUT"
