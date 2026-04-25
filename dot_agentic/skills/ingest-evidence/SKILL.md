@@ -220,6 +220,17 @@ Update relevant markdown files directly so a future session can continue without
 
 Do not write accomplishment narratives. State files should describe the engagement state, not what the agent did.
 
+Before finishing ingestion, review every finding that may have been affected by the new evidence. Look for findings that reference the same assets, services, users, roles, technologies, controls, open questions, or evidence gaps. For each affected finding, decide whether the evidence:
+
+- Answers something the finding was waiting on.
+- Confirms, weakens, refutes, or changes the severity of an existing finding.
+- Requires evidence links, status notes, waiting-for sections, impact, likelihood, or remediation details to be updated.
+- Creates a new tentative or confirmed finding.
+- Opens a new edge, such as a newly discovered service, trust boundary, identity path, exposed route, configuration surface, or follow-up question.
+- Closes an existing edge by answering or disproving it.
+
+Update findings and planning notes directly when the answer is clear. If an edge remains uncertain, record it as an open question or next step instead of burying it in the final response only.
+
 ## Findings
 
 Use `findings/` as the canonical findings directory.
@@ -302,13 +313,13 @@ Never run or recommend a target-side state-changing action as an ordinary next s
 
 ## Final Operator Response
 
-End with a concise free-form summary covering only what matters:
+End with a concise summary that always includes:
 
-- Raw files created or reused.
-- Parsed files created or reused.
-- What the new evidence shows.
-- Which findings were created, updated, confirmed, or closed.
-- How the plan or open questions changed.
-- Read-only-safe next steps, including any clearly flagged local-output writes or state-changing actions.
+1. A bullet-point list of `raw/` and `parsed/` files created or reused.
+2. What the ingested evidence tells us.
+3. Whether the evidence fully answered the intended question, partially answered it, or lacks the information that was being sought.
+4. What changes the new evidence makes to findings, including potential or confirmed new findings and updates to previous findings.
+5. What open edges the evidence created or closed.
+6. Proposed next steps focused on the highest priorities, which may have changed because of the new evidence.
 
 Avoid verbose detail that is already captured in files. Do not add closing pleasantries.
