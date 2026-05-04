@@ -12,7 +12,6 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 ORANGE='\033[0;38;5;208m'
 RED='\033[0;31m'
-BLUE='\033[0;38;5;45m'
 RESET='\033[0m'
 ITALIC='\033[3m'
 NOITALIC='\033[23m'
@@ -86,10 +85,30 @@ format_remaining() {
     printf '%dm' "$mins"
   fi
 }
-# Format a rate-limit field as "<prefix> <pct>% (<time remaining>)".
-# Only the "<prefix> <pct>%" head is colour-graded; the parenthesised
-# remainder is italicised but deliberately left uncoloured so the
-# percentage's severity stays the dominant visual signal.
+# Format a rate-limit field as "<prefix> <pct>% <bar>".
+#
+# The 10-cell bar visualises usage relative to time elapsed within the window.
+# Three shading levels create a visual hierarchy from background to foreground:
+#
+#   - Empty cells render as "░" (light shade) in the default colour, forming
+#     a continuous neutral rail so the bar always reads as 10 cells wide.
+#   - The *gap* between the usage cell and the elapsed-time cell — inclusive
+#     of the elapsed-time end, exclusive of the marker — renders as "▒"
+#     (medium shade) in a single colour determined by direction and magnitude:
+#       * Under pace (usage% < elapsed%): green; the gap sits to the *right*
+#         of the marker, extending toward the further-along time position.
+#       * Over pace (usage% > elapsed%): yellow (1 cell over), orange (2),
+#         red (3 or more) — uniform across the whole gap.  The gap sits to
+#         the *left* of the marker, extending back toward where time actually
+#         is.  Direction-of-gap is encoded by colour, not position.
+#       * On pace (same cell): no gap renders.
+#   - The marker cell — the *usage* fraction — renders as "█" (full block) in
+#     the default colour.  It aligns with the "<pct>%" readout to the left of
+#     the bar and serves as the glanceable "how much have I used" indicator.
+#
+# Cell N covers the range [N*10%, (N+1)*10), so 50% lands at cell 5 and 100%
+# clamps to cell 9.  The "<prefix> <pct>%" head retains its existing pct-
+# threshold colour.
 limit_label() {
   local prefix="$1"
   local pct="$2"
@@ -97,42 +116,59 @@ limit_label() {
   local window_secs="$4"
   local head
   head=$(colorize "$prefix $(printf '%.0f' "$pct")%" "$pct")
-  local suffix=""
-  # `resets_at` arrives as a Unix epoch integer, so we can use it directly.
-  # Guard with a numeric regex so a malformed value just hides the suffix
+  local bar=""
+  # `resets_at` arrives as a Unix epoch integer.  Guard with a numeric regex
+  # (and a positive-window check) so a malformed value just hides the bar
   # rather than blowing up the arithmetic below.
-  if [[ "$reset" =~ ^[0-9]+$ ]]; then
+  if [[ "$reset" =~ ^[0-9]+$ ]] && [ "$window_secs" -gt 0 ]; then
     local now_epoch remaining
     now_epoch=$(date +%s)
     remaining=$((reset - now_epoch))
-    if [ "$remaining" -gt 0 ]; then
-      local formatted
-      formatted=$(format_remaining "$remaining")
-      # Color the time-remaining label by pace: the ratio of usage consumed
-      # to time elapsed within the window.  A pace of 1.0 means on-track;
-      # higher means burning faster than the window can sustain.
-      local pace_col
-      pace_col=$(awk -v pct="$pct" -v rem="$remaining" -v win="$window_secs" 'BEGIN {
-        elapsed = win - rem
-        if (elapsed <= 0 || win <= 0) { print "none"; exit }
-        pace = (pct / 100) / (elapsed / win)
-        if (pace >= 2.0) print "red"
-        else if (pace >= 1.5) print "orange"
-        else if (pace >= 1.2) print "yellow"
-        else if (pace >= 0.8) print "green"
-        else print "blue"
-      }')
-      case "$pace_col" in
-        red)    suffix=" ${RED}${ITALIC}(${formatted})${RESET}" ;;
-        orange) suffix=" ${ORANGE}${ITALIC}(${formatted})${RESET}" ;;
-        yellow) suffix=" ${YELLOW}${ITALIC}(${formatted})${RESET}" ;;
-        green)  suffix=" ${GREEN}${ITALIC}(${formatted})${RESET}" ;;
-        blue)   suffix=" ${BLUE}${ITALIC}(${formatted})${RESET}" ;;
-        *)      suffix=" ${ITALIC}(${formatted})${NOITALIC}" ;;
+    # Clamp elapsed into [0, window_secs].  `remaining > window_secs` would
+    # mean clock skew or a bogus reset epoch; `remaining < 0` would mean the
+    # window is already past its reset.  Either way we keep the bar in range.
+    local elapsed=$((window_secs - remaining))
+    if [ "$elapsed" -lt 0 ]; then elapsed=0; fi
+    if [ "$elapsed" -gt "$window_secs" ]; then elapsed="$window_secs"; fi
+    local elapsed_pct usage_cell elapsed_cell
+    elapsed_pct=$(awk -v e="$elapsed" -v w="$window_secs" 'BEGIN { print (e/w)*100 }')
+    usage_cell=$(awk -v p="$pct"         'BEGIN { c=int(p/10); if (c>9) c=9; if (c<0) c=0; print c }')
+    elapsed_cell=$(awk -v p="$elapsed_pct" 'BEGIN { c=int(p/10); if (c>9) c=9; if (c<0) c=0; print c }')
+    # Pick a single colour for the over-pace gap based on its width, so all
+    # over-pace cells share one colour rather than fading per-cell.  Under-pace
+    # gaps are always green; on-pace shows no gap at all.
+    local gap_color=""
+    if [ "$usage_cell" -gt "$elapsed_cell" ]; then
+      local over_dist=$((usage_cell - elapsed_cell))
+      case "$over_dist" in
+        1) gap_color="$YELLOW" ;;
+        2) gap_color="$ORANGE" ;;
+        *) gap_color="$RED" ;;
       esac
+    elif [ "$usage_cell" -lt "$elapsed_cell" ]; then
+      gap_color="$GREEN"
     fi
+    local cells="" i
+    for i in 0 1 2 3 4 5 6 7 8 9; do
+      if [ "$i" -eq "$usage_cell" ]; then
+        # Marker: full block, no colour, anchors the bar at current usage so
+        # its position lines up with the "<pct>%" readout.
+        cells+="█"
+      elif [ "$usage_cell" -gt "$elapsed_cell" ] && [ "$i" -ge "$elapsed_cell" ] && [ "$i" -lt "$usage_cell" ]; then
+        # Over-pace gap, sitting to the left of the marker.
+        cells+="${gap_color}▒${RESET}"
+      elif [ "$usage_cell" -lt "$elapsed_cell" ] && [ "$i" -gt "$usage_cell" ] && [ "$i" -le "$elapsed_cell" ]; then
+        # Under-pace gap, sitting to the right of the marker.
+        cells+="${gap_color}▒${RESET}"
+      else
+        # Empty cells use the lightest shade in the default colour so the bar
+        # has a continuous visual rail; the marker and gap blocks rise out of it.
+        cells+="░"
+      fi
+    done
+    bar=" ${cells}"
   fi
-  printf '%s%s' "$head" "$suffix"
+  printf '%s%s' "$head" "$bar"
 }
 # Peak hours: 8 AM–2 PM ET (13:00–19:00 UTC), weekdays only.
 # Resolve the next peak boundary as an epoch so the remaining time can be
