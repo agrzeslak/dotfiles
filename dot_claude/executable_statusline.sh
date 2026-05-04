@@ -3,6 +3,10 @@ input=$(cat)
 
 MODEL=$(echo "$input" | jq -r '.model.display_name // "?"')
 CTX=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
+# We only need the input-side current_usage fields to compute cache hit rate.
+USAGE_IN=$(echo "$input" | jq -r '.context_window.current_usage.input_tokens // empty')
+USAGE_CACHE_R=$(echo "$input" | jq -r '.context_window.current_usage.cache_read_input_tokens // empty')
+USAGE_CACHE_W=$(echo "$input" | jq -r '.context_window.current_usage.cache_creation_input_tokens // empty')
 FIVE_H=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
 FIVE_H_RESET=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty')
 WEEK=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty')
@@ -16,44 +20,8 @@ RESET='\033[0m'
 ITALIC='\033[3m'
 NOITALIC='\033[23m'
 
-# Git branch and summary from workspace dir
-DIR=$(echo "$input" | jq -r '.workspace.current_dir // empty')
-BRANCH=""
-GIT_STATUS=""
-if [ -n "$DIR" ] && git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1; then
-  BRANCH=$(git -C "$DIR" branch --show-current 2>/dev/null)
-
-  ADDED=0
-  REMOVED=0
-
-  # Sum added/removed lines across staged + unstaged tracked changes.
-  while IFS=$'\t' read -r a d _; do
-    # Binary files show "-" instead of numeric counts.
-    [ "$a" = "-" ] && continue
-    [ "$d" = "-" ] && continue
-    ADDED=$((ADDED + a))
-    REMOVED=$((REMOVED + d))
-  done < <(git -C "$DIR" diff --numstat HEAD 2>/dev/null)
-
-  # Count changed files for a compact breadth indicator.
-  FILES=$(git -C "$DIR" diff --name-only HEAD 2>/dev/null | wc -l | tr -d ' ')
-
-  TOTAL=$((ADDED + REMOVED))
-  WARN=""
-
-  # Add a warning marker when churn gets large.
-  if [ "$TOTAL" -gt 400 ]; then
-    WARN="${RED}⛔${RESET} "
-  elif [ "$TOTAL" -ge 200 ]; then
-    WARN="${YELLOW}⚠${RESET} "
-  fi
-
-  if [ "$ADDED" -gt 0 ] || [ "$REMOVED" -gt 0 ] || [ "$FILES" -gt 0 ]; then
-    GIT_STATUS="${WARN}${GREEN}+${ADDED}${RESET}${RED} -${REMOVED}${RESET}${YELLOW} ~${FILES}${RESET}"
-  fi
-fi
-
-# Wrap a value in colour based on percentage thresholds
+# Wrap a value in colour based on percentage thresholds.  Used for fields where
+# *high* values are bad (rate-limit consumption, context fill).
 colorize() {
   local val="$1"
   local pct="$2"
@@ -67,10 +35,11 @@ colorize() {
     printf "%s" "$val"
   fi
 }
-# Format a non-negative duration in seconds as the two coarsest non-zero units:
-# weekly windows show "Xd Yh", multi-hour windows show "Xh Ym", and anything
-# under an hour collapses to just "Ym". Shared by the rate-limit reset labels
-# and the peak/off-peak indicator so both read consistently.
+# Format a non-negative duration in seconds as a single most-significant unit:
+# anything ≥ 1 day prints as "Xd", anything ≥ 1 hour prints as "Xh", otherwise
+# minutes ("Ym").  We deliberately drop sub-units — the statusline is glanced
+# at, not read, and "1d" / "2h" carries enough timing information without the
+# extra digits.  Used by the peak/off-peak indicator only.
 format_remaining() {
   local remaining="$1"
   local days hours mins
@@ -78,9 +47,9 @@ format_remaining() {
   hours=$(((remaining % 86400) / 3600))
   mins=$(((remaining % 3600) / 60))
   if [ "$days" -gt 0 ]; then
-    printf '%dd %dh' "$days" "$hours"
+    printf '%dd' "$days"
   elif [ "$hours" -gt 0 ]; then
-    printf '%dh %dm' "$hours" "$mins"
+    printf '%dh' "$hours"
   else
     printf '%dm' "$mins"
   fi
@@ -170,9 +139,70 @@ limit_label() {
   fi
   printf '%s%s' "$head" "$bar"
 }
-# Peak hours: 8 AM–2 PM ET (13:00–19:00 UTC), weekdays only.
-# Resolve the next peak boundary as an epoch so the remaining time can be
-# rendered through the same format_remaining helper the reset labels use.
+# --- Git status --------------------------------------------------------------
+# Branch name plus a churn summary (added/removed lines and changed file count)
+# for the workspace directory.  The warning marker fires on large churn so a
+# branch carrying a lot of uncommitted change is visible at a glance.
+DIR=$(echo "$input" | jq -r '.workspace.current_dir // empty')
+BRANCH=""
+GIT_STATUS=""
+if [ -n "$DIR" ] && git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1; then
+  BRANCH=$(git -C "$DIR" branch --show-current 2>/dev/null)
+
+  ADDED=0
+  REMOVED=0
+
+  # Sum added/removed lines across staged + unstaged tracked changes.
+  while IFS=$'\t' read -r a d _; do
+    # Binary files show "-" instead of numeric counts.
+    [ "$a" = "-" ] && continue
+    [ "$d" = "-" ] && continue
+    ADDED=$((ADDED + a))
+    REMOVED=$((REMOVED + d))
+  done < <(git -C "$DIR" diff --numstat HEAD 2>/dev/null)
+
+  # Count changed files for a compact breadth indicator.
+  FILES=$(git -C "$DIR" diff --name-only HEAD 2>/dev/null | wc -l | tr -d ' ')
+
+  TOTAL=$((ADDED + REMOVED))
+  WARN=""
+
+  # Add a warning marker when churn gets large.
+  if [ "$TOTAL" -gt 400 ]; then
+    WARN="${RED}⛔${RESET} "
+  elif [ "$TOTAL" -ge 200 ]; then
+    WARN="${YELLOW}⚠${RESET} "
+  fi
+
+  if [ "$ADDED" -gt 0 ] || [ "$REMOVED" -gt 0 ] || [ "$FILES" -gt 0 ]; then
+    GIT_STATUS="${WARN}${GREEN}+${ADDED}${RESET}${RED} -${REMOVED}${RESET}${YELLOW} ~${FILES}${RESET}"
+  fi
+fi
+# --- Cache hit rate ----------------------------------------------------------
+# Computed from the most recent API call's input-side breakdown:
+#   cache_read / (input + cache_creation + cache_read)
+# Healthy turns sit at ~95%+ and routine dips into the 80s aren't worth a
+# glance, so we suppress the field entirely above 70%.  Below 70% means the
+# prompt prefix is being significantly invalidated, which is the only state
+# where the operator might want to investigate (e.g. a tool result is mixing
+# into the cached prefix and breaking it).
+CACHE_LABEL=""
+if [ -n "$USAGE_IN$USAGE_CACHE_R$USAGE_CACHE_W" ]; then
+  IN=${USAGE_IN:-0}
+  CR=${USAGE_CACHE_R:-0}
+  CW=${USAGE_CACHE_W:-0}
+  TOTAL_IN=$((IN + CW + CR))
+  if [ "$CR" -gt 0 ] && [ "$TOTAL_IN" -gt 0 ]; then
+    CACHE_PCT=$(awk -v cr="$CR" -v t="$TOTAL_IN" 'BEGIN { printf "%.0f", (cr/t)*100 }')
+    if [ "$CACHE_PCT" -lt 70 ]; then
+      CACHE_LABEL="${YELLOW}↻${CACHE_PCT}%${RESET}"
+    fi
+  fi
+fi
+# --- Peak / off-peak ---------------------------------------------------------
+# Peak hours: 8 AM–2 PM ET (13:00–19:00 UTC), weekdays only.  Resolve the next
+# peak boundary as an epoch so the remaining time can be rendered through
+# format_remaining.
 HOUR_UTC=$(date -u +%H)
 DOW=$(date -u +%u)  # 1=Mon … 7=Sun
 NOW_EPOCH=$(date +%s)
@@ -201,20 +231,21 @@ else
 fi
 # If both date invocations failed we drop the parenthesised remainder rather
 # than emitting a broken "()" so the label still renders cleanly.
-PEAK_INDICATOR=" · ${PEAK_LABEL}"
+PEAK_CONTENT="${PEAK_LABEL}"
 if [[ "$TARGET_EPOCH" =~ ^[0-9]+$ ]]; then
   REMAINING=$((TARGET_EPOCH - NOW_EPOCH))
   if [ "$REMAINING" -gt 0 ]; then
-    PEAK_INDICATOR="${PEAK_INDICATOR} ${ITALIC}($(format_remaining "$REMAINING"))${NOITALIC}"
+    PEAK_CONTENT="${PEAK_CONTENT} ${ITALIC}($(format_remaining "$REMAINING"))${NOITALIC}"
   fi
 fi
-# Format each field
+# --- Single-line layout ------------------------------------------------------
+# <model> · branch · git_status · ctx N% · 5h N% bar · 7d N% bar · peak/off-peak [· ↻N% if low]
 OUT="$MODEL"
 [ -n "$BRANCH"     ] && OUT="$OUT · $BRANCH"
 [ -n "$GIT_STATUS" ] && OUT="$OUT · $GIT_STATUS"
-[ -n "$FIVE_H"     ] && OUT="$OUT · $(limit_label "5h" "$FIVE_H" "$FIVE_H_RESET" 18000)"
-[ -n "$WEEK"       ] && OUT="$OUT · $(limit_label "7d" "$WEEK"  "$WEEK_RESET" 604800)"
 [ -n "$CTX"        ] && OUT="$OUT · $(colorize "ctx $(printf '%.0f' "$CTX")%" "$CTX")"
-OUT="$OUT$PEAK_INDICATOR"
+[ -n "$FIVE_H" ] && OUT="$OUT · $(limit_label "5h" "$FIVE_H" "$FIVE_H_RESET" 18000)"
+[ -n "$WEEK"   ] && OUT="$OUT · $(limit_label "7d" "$WEEK"  "$WEEK_RESET" 604800)"
+OUT="$OUT · $PEAK_CONTENT"
+[ -n "$CACHE_LABEL" ] && OUT="$OUT · $CACHE_LABEL"
 echo -e "$OUT"
-
