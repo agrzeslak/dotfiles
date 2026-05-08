@@ -26,6 +26,20 @@
 #     [Unchanged] <path>   (yellow) destination already matched the source
 #     [Failed   ] <path>   (red)    action was attempted but errored
 #   Paths and skill names are highlighted in light blue so they stand out.
+#
+# Per-skill target filtering:
+# - A skill directory may contain an empty marker file to restrict which
+#   destinations it is synced to:
+#     .claude-only   sync only to Claude destinations (skip Codex)
+#     .codex-only    sync only to Codex destinations  (skip Claude)
+#   With no marker, the skill is synced to both (the default).
+#   Both markers present is an error for that skill.
+# - Filtered-out skills are reported as Skipped at the excluded destination,
+#   and any pre-existing destination copy will fall through to the normal
+#   stale-skill deletion prompt on the next run, so excluding a skill cleans
+#   up its old copy automatically (with confirmation).
+# - Marker files themselves are excluded from rsync, so they never appear in
+#   the destination skill directories.
 
 # Colors are emitted only when stdout is a terminal. We resolve them once,
 # globally, so both the report function and the callers (which embed BLUE in
@@ -125,6 +139,9 @@ end
 function sync_skills_if_parent_exists
     set -l source_dir $argv[1]
     set -l dest_dir $argv[2]
+    # target_name is the family this destination belongs to ("claude" or
+    # "codex"). Used to interpret per-skill .claude-only / .codex-only markers.
+    set -l target_name $argv[3]
 
     set -l parent_dir (dirname "$dest_dir")
 
@@ -143,6 +160,11 @@ function sync_skills_if_parent_exists
         return 1
     end
 
+    # Marker filenames are excluded from rsync so they never propagate to
+    # destinations. We also keep the names in fish variables so the filter
+    # check below stays consistent with the rsync exclusion set.
+    set -l rsync_excludes --exclude=.claude-only --exclude=.codex-only
+
     # We rsync each top-level skill individually so that we can report
     # Created vs Updated per skill rather than emitting a single status line
     # for the whole batch. --delete inside each skill keeps removed inner
@@ -155,8 +177,31 @@ function sync_skills_if_parent_exists
         end
 
         set -l skill_name (basename "$src_path")
-        set -a source_skill_names $skill_name
         set -l dest_path "$dest_dir/$skill_name"
+
+        # Per-skill target filtering. A skill that excludes the current
+        # target is reported as Skipped here and intentionally NOT added to
+        # source_skill_names, so any pre-existing destination copy will fall
+        # through to the stale-skill prompt below.
+        set -l claude_only "$src_path/.claude-only"
+        set -l codex_only "$src_path/.codex-only"
+
+        if test -f "$claude_only"; and test -f "$codex_only"
+            report Failed "$BLUE$dest_path$RESET (both .claude-only and .codex-only markers present)"
+            continue
+        end
+
+        if test -f "$claude_only"; and test "$target_name" = codex
+            report Skipped "$BLUE$dest_path$RESET (.claude-only marker)"
+            continue
+        end
+
+        if test -f "$codex_only"; and test "$target_name" = claude
+            report Skipped "$BLUE$dest_path$RESET (.codex-only marker)"
+            continue
+        end
+
+        set -a source_skill_names $skill_name
 
         set -l action
         if test -d "$dest_path"
@@ -167,7 +212,7 @@ function sync_skills_if_parent_exists
 
         # Probe rsync first so unchanged skills can be reported without doing
         # a no-op sync that looks like an update.
-        set -l rsync_probe (rsync -ain --delete "$src_path/" "$dest_path/")
+        set -l rsync_probe (rsync -ain --delete $rsync_excludes "$src_path/" "$dest_path/")
         set -l probe_status $status
 
         if test $probe_status -ne 0
@@ -180,7 +225,7 @@ function sync_skills_if_parent_exists
             continue
         end
 
-        if rsync -a --delete "$src_path/" "$dest_path/"
+        if rsync -a --delete $rsync_excludes "$src_path/" "$dest_path/"
             report $action "$BLUE$dest_path$RESET"
         else
             report Failed "$BLUE$dest_path$RESET"
@@ -227,5 +272,5 @@ end
 copy_file_if_parent_exists "$SOURCE_AGENTS" "$HOME/.codex/AGENTS.md"
 copy_file_if_parent_exists "$SOURCE_AGENTS" "$HOME/.claude/CLAUDE.md"
 
-sync_skills_if_parent_exists "$SOURCE_SKILLS" "$HOME/.codex/skills"
-sync_skills_if_parent_exists "$SOURCE_SKILLS" "$HOME/.claude/skills"
+sync_skills_if_parent_exists "$SOURCE_SKILLS" "$HOME/.codex/skills" codex
+sync_skills_if_parent_exists "$SOURCE_SKILLS" "$HOME/.claude/skills" claude
