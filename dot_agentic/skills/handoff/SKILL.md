@@ -1,103 +1,125 @@
 ---
 name: handoff
-description: create a terse, high-signal handoff at the end of a coding or implementation conversation. use when a step has just been completed and chatgpt should summarize what was achieved, why it mattered, and what the likely next best implementation step is so a fresh chat can continue without re-grounding from zero. trigger on requests about handoff, launchpad, what was just done, what to implement next, moving from step x to x+1, summarizing completed implementation work, or preparing a new coding chat with minimal context.
+description: Compact the current conversation into a self-contained prompt that a fresh Claude Code session can paste in and execute. Use when the user wants to spawn a new agent/session to continue work — typically phrased "create a handoff for the agent that will be implementing X" or bare "/handoff". The skill emits a paste-able brief: the task statement, just enough placement context (cwd, key files, branch state, tooling, invariants), and pointers to skills the receiver should invoke. Ruthlessly filtered to X; not a general session summary.
 ---
 
 # Handoff
 
-## Overview
+## What this skill does
 
-Produce a compact handoff for the next coding model using only the context already present in the current conversation. Optimize for minimum re-grounding cost, not for completeness. Explain what was just accomplished, why it was done, and what the most likely next implementation step should be.
+Compact this conversation into the minimum payload a **fresh Claude Code session in the same project** needs to start executing a specific task without rediscovery. Output is a single fenced block the user copies and pastes as the first message of the new session.
 
-## Operating Rules
+The receiver has filesystem and tool access but **zero conversation context**.
 
-- Use only the current conversation context and any files or paths already mentioned in it.
-- Do not ask the user for additional input if the conversation already contains enough signal to produce a useful handoff.
-- Do not restate the full architecture or roadmap unless it is directly needed to justify the next step.
-- Prefer concrete implementation context over abstract summaries.
-- Prefer exact file paths, symbol names, interfaces, tests, and docs when they are available in context.
-- Keep the output terse and dense.
-- Do not include motivational language, project-management filler, or generic advice.
-- Do not generate a prompt for the next chat unless explicitly asked. Output only the handoff text.
-- If the context is incomplete or ambiguous, say so briefly and still provide the best grounded next step.
+## Guiding heuristic
 
-## Goal
+**Write everything you would want to know if you were the one doing the task — and nothing more.**
 
-Create an ultra high signal-noise launchpad for the next model so it can begin implementing the next step with minimal rediscovery.
+You (the current agent) just lived through the work. Imagine being handed only your draft brief and told to start on the task. Anything you would reach for, anything you would be annoyed not to know, anything you would re-derive from the conversation you no longer have — that belongs in the handoff. Anything else doesn't.
 
-## Reasoning Process
+This catches things that fixed section templates miss:
 
-Follow this process internally before writing the handoff:
+- dead ends already tried ("we ruled out approach Z because Y")
+- naming traps, look-alike files, two-plausible-mental-models situations
+- library or API quirks discovered through trial
+- subtle conventions the conversation established that no single file documents
 
-1. Identify the most recent concrete implementation outcome in the conversation.
-2. Infer why that work was done from stated goals, constraints, roadmap notes, bug reports, or architectural decisions in the chat.
-3. Extract the durable facts that matter for continuation:
-   - completed behavior
-   - touched components
-   - decisions made
-   - constraints or invariants
-   - unresolved edges
-4. Infer the most likely next best implementation step.
-5. Prefer the next step that is:
-   - directly unlocked by the completed work
-   - small enough to start immediately
-   - aligned with stated roadmap or architecture
-   - constrained by the actual code and docs already referenced
-6. Include pointers to source files or docs only when they are relevant to the next step.
+It also keeps the brief honest: if the simulation produces nothing new for a section, drop the section.
 
-## Selection Rules For The Next Step
+## When to invoke
 
-Choose one primary next implementation step.
+- Caller's prompt contains framing like *"create a handoff for the agent that will be implementing X"*, *"handoff for the next session"*, *"prepare a brief for a new chat doing Y"*.
+- Bare `/handoff` — infer the most likely next task from conversation (and say so in the output so the user can correct).
+- **Not** for end-of-chat summaries, status reports, or PM-style writeups. This is a launchpad for execution.
 
-Prefer:
-- the next dependent slice enabled by the completed work
-- the highest-leverage unfinished piece already implied by the conversation
-- the step with the clearest implementation boundary
+## Operating rules
 
-Avoid:
-- broad multi-epic plans
-- speculative future work not grounded in the conversation
-- testing, cleanup, or docs as the primary next step unless they are clearly the critical blocker
-- listing many equal-priority options without making a recommendation
+- Single primary task. If multiple plausible tasks exist, pick one and (optionally) name a runner-up in one line.
+- Ruthless filter: drop anything not relevant to the task. Unrelated detours from earlier in the conversation do not belong.
+- Prefer **file:line references** over inlining code. Inline a snippet only when it was edited in conversation and has not been written to disk yet.
+- Reference skills by name when the receiver should invoke them (e.g., `superpowers:test-driven-development`, `pentest-testing`). Do not paraphrase skill content.
+- No motivational language, no architecture lectures, no roadmap recaps beyond what bears on the task.
+- Hard cap: ~2000 tokens. Soft target: 300–1000 tokens. If over budget, drop inlined content to refs and trim "nice to know" sections first.
 
-If multiple next steps are plausible, choose the best one and mention the runner-up in a short note only if it materially affects sequencing.
+## Process
 
-## Output Contract
+Run these steps before writing the handoff. Skip a step only when the conversation already provides the same information unambiguously.
 
-Always use this exact structure:
+1. **Establish the task (X).** Take it from the caller's prompt verbatim where possible. If absent, infer the highest-leverage next step from conversation and flag the inference at the top of the brief.
+2. **Gather live placement state** with quick tool calls:
+   - `pwd` — confirm working directory
+   - `git rev-parse --show-toplevel && git branch --show-current` — repo root and branch
+   - `git status --short` — what's dirty / staged
+   - `git log --oneline -n 5` — recent commits (so the receiver doesn't redo them)
+   - Conditionally: `ls` on a directory the task targets, if conversation didn't already describe its shape.
+3. **Extract task-relevant context from the conversation:**
+   - Files, symbols, tests, configs that the task will touch.
+   - Decisions and invariants the user locked in that the receiver must preserve (these often live in side comments — surface them).
+   - In-conversation edits not yet committed — these usually must be inlined.
+   - Open questions the receiver needs to answer to proceed.
+4. **Identify skills the receiver should invoke first.** Look at the task verb (implement, debug, test, scope, write finding, review). Name the load-bearing skill(s) in the output.
+5. **Compose a draft.**
+6. **Run the simulation pass.** Re-read the draft as if you've just been handed it and told to execute the task with no other context. For each thing you'd want to reach for that isn't there — a dead end, a gotcha, a related file, a convention, a "the real one is X not Y" — add it. For each bullet that you wouldn't actually use, cut it. Then re-check the length cap; drop inlined snippets to refs first if over budget.
 
-### What just landed
-Write 2-5 bullets describing the most recent completed implementation work. Be concrete.
+## Output
 
-### Why it matters
-Write 1 short paragraph explaining the purpose of that work and how it changes the system or unlocks follow-on work.
+Emit one fenced markdown block. The user copies it as the first message of the new session. Do **not** include preamble outside the block — anything outside is wasted.
 
-### Next best implementation step
-Write 1 short paragraph naming the single best next step and why it is next.
+Template:
 
-### Likely touch points
-List the most relevant files, modules, classes, functions, tests, or docs already referenced in the conversation.
-Use exact paths or names when available.
+````markdown
+## Task
+<One paragraph or 2–4 bullets describing exactly what the receiver should do. Take wording from the caller's prompt where possible. If inferred (bare /handoff), prefix with "(Inferred from prior conversation — correct if wrong.)">
 
-### Carry-forward constraints
-List only the constraints, assumptions, or decisions that the next model must preserve.
+## Placement
+- **cwd**: `<absolute path>`
+- **repo**: `<repo root>` on branch `<branch>`
+- **dirty**: <list paths from `git status --short`, or "clean">
+- **recent commits**: <2–4 entries from `git log --oneline`, only if they matter for the task>
 
-### Open edges
-List any unresolved details, risks, or ambiguities that could affect the next step.
+## Files to know
+- `path/to/file.rs:42-90` — <one-line role: "the function being modified", "where the trait is defined">
+- `path/to/test.rs` — <relevance>
+<Only files the receiver will need within the first few steps. Not exhaustive.>
 
-## Style Requirements
+## Constraints & invariants
+- <Decision the receiver must preserve, with the reason in <=1 short clause if not obvious.>
+- <Convention or contract that prior work depends on.>
+<Skip section if there are none.>
 
-- Be terse.
-- Be specific.
-- Use strong nouns and verbs.
-- Prefer bullets over long prose.
-- Keep each bullet to one idea.
-- Avoid hedging unless uncertainty is real.
-- Avoid repeating the same fact across sections.
+## Skills to invoke first
+- `<skill-name>` — <why>
+<Skip section if none apply.>
 
-## Quality Bar
+## Open questions / decisions pending
+- <Question the receiver needs to resolve, with the leading option if there is one.>
+<Skip section if none.>
 
-A good handoff should let a fresh coding model answer: “What was completed, why was it done, and what should I implement next?” within a few seconds of reading.
+## Gotchas & dead ends
+- <Approach already tried and ruled out, with the one-clause reason.>
+- <Look-alike trap: "the real X is at path A, not path B; B is the old version".>
+- <Library/API quirk discovered in this conversation that isn't in any doc.>
+- <Convention this conversation established that no single file documents.>
+<Skip section if the simulation pass surfaced nothing.>
 
-If the conversation contains strong references to code or docs, include them.
-If it does not, do not invent them.
+## Uncommitted in-conversation edits
+<Only when in-conversation changes haven't been written to disk. Inline minimal snippets with file paths. Skip section otherwise.>
+````
+
+## Style
+
+- Terse. Strong nouns and verbs. Bullets over prose.
+- One idea per bullet. Each bullet must earn its tokens.
+- File paths exact. No "around line 40-ish".
+- No hedging unless uncertainty is real and material to the task.
+- Do not repeat the same fact in multiple sections.
+
+## Quality bar
+
+The simulation pass is the quality bar: re-read the draft as if you've just been handed it and told to execute the task with no other context.
+
+- If there is anything you would reach for that isn't in the draft, add it.
+- If there is anything in the draft you wouldn't actually use, cut it.
+- If you'd be annoyed not to know something — a dead end, a naming trap, a quirk — it belongs in `Gotchas & dead ends`.
+
+The draft is ready when the simulation produces no additions and no cuts.
