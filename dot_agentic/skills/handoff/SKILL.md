@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: Compact the current conversation into a self-contained prompt that a fresh Claude Code session can paste in and execute. Use when the user wants to spawn a new agent/session to continue work — typically phrased "create a handoff for the agent that will be implementing X" or bare "/handoff". The skill emits a paste-able brief: the task statement, just enough placement context (cwd, key files, branch state, tooling, invariants), and pointers to skills the receiver should invoke. Ruthlessly filtered to X; not a general session summary.
+description: Compact the current conversation into a self-contained prompt that a fresh Claude Code session can paste in and execute. Use when the user wants to spawn a new agent/session to continue work — typically phrased "create a handoff for the agent that will be implementing X" or bare "/handoff". The skill emits a paste-able brief including the task statement, just enough placement context (cwd, key files, branch state, tooling, invariants), and pointers to skills the receiver should invoke. Ruthlessly filtered to X; not a general session summary.
 ---
 
 # Handoff
