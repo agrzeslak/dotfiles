@@ -37,9 +37,7 @@
         "ctrl+v": "chat:imagePaste",
         "space": "voice:pushToTalk",
 				"ctrl+u": "scroll:halfPageUp",
-				"ctrl+d": "scroll:halfPageDown",
-				"g g": "scroll:top",
-				"G": "scroll:bottom"
+				"ctrl+d": "scroll:halfPageDown"
       }
     },
     {
