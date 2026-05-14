@@ -62,18 +62,47 @@ Map target → flags:
 | `uncommitted` | `--uncommitted` |
 | `commit` | `--commit <sha>` |
 
-**Custom prompt forwarding.** If the operator passed trailing text to `/codex-review`:
+**Construct a human-readable target phrase** to splice into the prompt:
+
+| Target type | Target phrase |
+|---|---|
+| `pr` | `PR #<num>` |
+| `branch` | `the changes on branch <currentBranch> vs base <baseBranch>` |
+| `commit` | `commit <sha>` |
+| `uncommitted` | `the uncommitted changes in the working tree` |
+
+**Always pass the following prompt** as the trailing positional after a `--` separator. The `--` prevents text starting with `-` from being parsed as a codex flag. Substitute `<target phrase>` with the value from the table above:
+
+```
+You may encounter `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`.
+
+Do not treat that as a review result. Per the active tool policy, if an important command fails due to sandboxing, rerun that command with `sandbox_permissions: "require_escalated"` and include a short justification. `gh` may be unsandboxable, so attempt it normally only if required by policy, then request escalation after the sandbox failure.
+
+Review <target phrase> in code-review mode:
+1. Identify the behavioral contract changed by the PR.
+2. Inspect the diff and relevant surrounding code.
+3. Search for dependents and sibling paths.
+4. Run focused verification where practical.
+5. Return findings first, ordered by severity, with file/line references.
+6. If no issues are found, say so and list any residual test gaps.
+
+Follow the repo's AGENTS.md instructions, especially ADR conformance and review workflow.
+```
+
+**Operator trailing text.** If the operator passed trailing text to `/codex-review`:
 
 - Drop the text if it is exactly `-` (codex would treat that as stdin and hang).
-- Otherwise pass it as the trailing positional after a `--` separator, e.g.:
+- Otherwise append it to the prompt above as an `Additional focus:` line on a new line at the end, e.g. if the operator wrote `/codex-review focus on the auth changes`, the final line of the prompt becomes:
 
   ```
-  codex review --base main -- "focus on the auth changes"
+  Additional focus: focus on the auth changes
   ```
 
-  The `--` prevents text starting with `-` from being parsed as a codex flag.
+Pass the whole assembled prompt as a single positional argument. Example shape:
 
-If no trailing text is provided, do **not** pass any prompt — let codex use its default review behaviour. The independence of codex's review is part of the value.
+```
+codex review --base main -- "<assembled prompt>"
+```
 
 ## Step 4 — Run codex review
 
