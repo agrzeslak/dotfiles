@@ -34,6 +34,12 @@ Refuse with a short, clear message if:
 
 1. **No target is determinable** per the resolution table — neither a git-based target nor explicit file paths/snippets.
 2. **Git-based target with empty diff.** For `branch`/`uncommitted`, `git diff <base>...HEAD --stat` (resp. `git status --porcelain`) must be non-empty. For `pr`, `git diff <base_ref>...<head_ref> --stat` (refs from `gh pr view`) must be non-empty. If `<head_ref>` is not present locally, fetch it first: `gh pr checkout <num> --detach` would work but mutates the working tree — instead use `git fetch origin pull/<num>/head:refs/custom-review/pr-<num>` and use that ref as `<head_ref>`. Never switch branches or touch the working tree.
+3. **PR target with unpushed local commits.** For `pr` targets, after resolving `<head_ref>` (branch name) and `<head_oid>` via `gh pr view`, check whether a local branch named `<head_ref>` exists (`git rev-parse --verify --quiet refs/heads/<head_ref>`). If it does and its tip OID is not equal to `<head_oid>`, classify and act on the divergence:
+   - `git merge-base --is-ancestor <head_oid> refs/heads/<head_ref>` exits 0 → local is **ahead** (unpushed commits). Refuse with: `Local branch <name> has N unpushed commit(s); GitHub still shows the old code. Push the commits and re-run.` Print `git log --oneline <head_oid>..refs/heads/<head_ref>` so the operator sees what's unpushed.
+   - `git merge-base --is-ancestor refs/heads/<head_ref> <head_oid>` exits 0 → local is **behind** GitHub. Proceed; GitHub's PR head is the source of truth and the local stale branch is not consulted.
+   - Neither is ancestor of the other → branches have **diverged** (typically a pending force-push or local rebase). Refuse with: `Local branch <name> has diverged from GitHub's PR head (likely pending force-push). Push the rewritten branch (e.g. git push --force-with-lease) and re-run.`
+
+   The check uses only `git rev-parse` and `git merge-base --is-ancestor`; nothing is mutated. The check is `pr`-only — for `branch`, `commit`, and `uncommitted` targets the local working state IS what gets reviewed, so there is no "stale" mismatch to guard against.
 
 ## Target resolution
 
@@ -457,6 +463,8 @@ Mandatory reads at specific points, not optional context.
 | Not in git AND no paths/snippet given | Refuse; ask operator for paths. |
 | Empty diff (git target) | Refuse with `nothing to review`. |
 | PR target — `<head_ref>` not present locally | Fetch read-only: `git fetch origin pull/<num>/head:refs/custom-review/pr-<num>`. Do not abort, do not checkout. |
+| PR target — local branch with same name as `<head_ref>` is ahead of GitHub's `<head_oid>` | Refuse with the unpushed-commits message in Hard preconditions #3. Print `git log --oneline <head_oid>..refs/heads/<head_ref>`. |
+| PR target — local branch with same name as `<head_ref>` has diverged from `<head_oid>` (neither ancestor) | Refuse with the diverged-branch message in Hard preconditions #3 (likely pending force-push). |
 | Target ambiguous | Ask one short multi-choice question. |
 | Operator passed `-` as trailing text | Ignore. |
 | `gh` unavailable for PR target | Refuse. Without `gh pr view`, head/base ref names cannot be resolved reliably. Ask the operator for explicit head/base (e.g. `/custom-review against <base>` from a branch that tracks the PR head) and proceed as a `branch` target. |
