@@ -189,7 +189,14 @@ Sample prompt (fill in concrete values):
 
 ### Reviewer C — claude `/custom-review2` (Agent tool, foreground)
 
-Same as Reviewer B but invoking the `custom-review2` skill.
+Same as Reviewer B but invoking the `custom-review2` skill (not `custom-review`).
+
+**Naming gotcha — read carefully.** The `custom-review2` skill writes its review into a directory named `tmp/custom-review-<timestamp>/` (note: same `custom-review-` prefix as the v1 skill — the `2` does *not* appear in its own output path). The two subagents therefore return `REVIEW_PATH=` values that look interchangeable. **Do not** identify which review is which by inspecting their source paths. Identify them solely by which subagent (B or C) returned the reply, and copy each to its correct destination:
+
+- Reviewer B's reply → `tmp/multi-review/custom-review-<slug>.md`
+- Reviewer C's reply → `tmp/multi-review/custom-review2-<slug>.md`  ← the `2` MUST be in this filename.
+
+If you overwrite Reviewer C's output into `custom-review-<slug>.md`, downstream Step 4 (synthesis) and Step 8 (evaluation) will silently treat the v2 review as the v1 review, and the evaluation will compare the wrong skills.
 
 ### Why one Bash + two Agents in one message
 
@@ -199,15 +206,29 @@ All three are independent; issuing them in a single message starts them in paral
 
 After all three reviewers finish, normalize their outputs so Step 4 can read predictable paths.
 
-For each Agent reviewer (B and C):
+Process Reviewers B and C **separately**, by which subagent returned the reply — never by inspecting `REVIEW_PATH`, which uses the same `tmp/custom-review-<timestamp>/` prefix for both skills (see "Naming gotcha" under Reviewer C).
 
-1. Parse the agent's reply for `REVIEW_PATH=<...>`. If parsing fails or the file does not exist, treat as failure.
-2. On success: `Read` the file, then `Write` its full contents to `tmp/multi-review/custom-review-<slug>.md` (or `custom-review2-<slug>.md`). Use `Read` + `Write` rather than a shell `cp` so the file goes through normal write paths.
-3. Write `tmp/multi-review/custom-review-<slug>.status.json` (likewise for C):
+**Reviewer B (`custom-review`):**
+
+1. Parse Reviewer B's reply for `REVIEW_PATH=<...>`. If parsing fails or the file does not exist, treat as failure.
+2. On success: `Read` the source file, then `Write` its full contents to `tmp/multi-review/custom-review-<slug>.md` (no `2`). Use `Read` + `Write` rather than a shell `cp` so the file goes through normal write paths.
+3. Write `tmp/multi-review/custom-review-<slug>.status.json`:
    ```json
-   {"reviewer":"custom-review","ok":true,"source":"<REVIEW_PATH>","findings":<N>,"output":"tmp/multi-review/custom-review-<slug>.md"}
+   {"reviewer":"custom-review","ok":true,"source":"<REVIEW_PATH from B>","findings":<N>,"output":"tmp/multi-review/custom-review-<slug>.md"}
    ```
 4. On failure: write a placeholder `tmp/multi-review/custom-review-<slug>.md` containing exactly `FAILED: <reason>` and a status sidecar with `"ok":false,"reason":"<reason>"`.
+
+**Reviewer C (`custom-review2`):**
+
+1. Parse Reviewer C's reply for `REVIEW_PATH=<...>`. If parsing fails or the file does not exist, treat as failure.
+2. On success: `Read` the source file, then `Write` its full contents to `tmp/multi-review/custom-review2-<slug>.md` (the `2` MUST appear in this destination filename). Use `Read` + `Write` rather than a shell `cp`.
+3. Write `tmp/multi-review/custom-review2-<slug>.status.json` (note the `2`):
+   ```json
+   {"reviewer":"custom-review2","ok":true,"source":"<REVIEW_PATH from C>","findings":<N>,"output":"tmp/multi-review/custom-review2-<slug>.md"}
+   ```
+4. On failure: write a placeholder `tmp/multi-review/custom-review2-<slug>.md` containing exactly `FAILED: <reason>` and a status sidecar `tmp/multi-review/custom-review2-<slug>.status.json` with `"ok":false,"reason":"<reason>"`.
+
+**Post-write sanity check.** Before proceeding to Step 4, confirm that all of `tmp/multi-review/custom-review-<slug>.md`, `tmp/multi-review/custom-review2-<slug>.md`, and (if codex ran) `tmp/multi-review/codex-<slug>.md` exist as distinct files. If `custom-review2-<slug>.md` is missing, you forgot the `2` in a destination path above — find and rename before continuing.
 
 For codex (Reviewer A): the status sidecar was already written by the bash command. If `exit != 0` or the output file is empty (`stat -c %s ... -eq 0`), update its status to `"ok":false` and leave the output file as-is (codex's own error messages are useful evidence).
 
