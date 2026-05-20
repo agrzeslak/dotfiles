@@ -1,6 +1,6 @@
 ---
 name: multi-review
-description: Run three independent reviewers in parallel (codex `/review`, claude `/custom-review`, claude `/custom-review2`) against the same target, save verbatim outputs to `tmp/multi-review/`, synthesize a merged best-of review, optionally apply the fixes, then write an A/B evaluation comparing the three reviewers on accuracy, signal-to-noise, and depth. The evaluation is the point — it powers iterative improvement of the review skills. Non-target trailing text after `/multi-review` is forwarded verbatim to each reviewer as additional focus.
+description: Run three independent reviewers in parallel (codex `/review`, claude `/custom-review`, claude `/custom-review2`) against the same target, save verbatim outputs to `tmp/multi-review/`, synthesize a merged best-of review, optionally apply the fixes, then write an A/B evaluation comparing the three reviewers on accuracy, signal-to-noise, and depth. The evaluation is the point — it powers iterative improvement of the review skills. Codex runs as a plain `/review` with only the target; non-target trailing text after `/multi-review` is forwarded verbatim to the two claude reviewers as additional focus.
 ---
 
 # Multi Review
@@ -25,7 +25,7 @@ Refuse with a clear, short message if any fail:
 Split `/multi-review`'s trailing text into:
 
 - **Target hints** — phrases that explicitly identify what to review (see table below).
-- **Focus text** — everything that doesn't match a target hint; forwarded verbatim to each reviewer as additional focus.
+- **Focus text** — everything that doesn't match a target hint; forwarded verbatim to the two claude reviewers (custom-review and custom-review2) as additional focus. Codex is not given focus text — it runs as a plain `/review` with only the target flags.
 
 Target heuristics (parse from args; default to uncommitted):
 
@@ -120,68 +120,25 @@ All three start in a **single message** with three tool calls so they run concur
 
 ### Reviewer A — codex (background Bash)
 
-Mirror the `codex-review` skill's invocation. Flags by target:
+Run a plain `codex review` with only the target flags — **no custom prompt, no AGENTS.md preamble, no focus text**. Codex sees the same invocation it would see from a bare `/review` against this target. Flags by target:
 
-| Target | Flags | Custom prompt? |
-|---|---|---|
-| `pr` | `--base <baseRefName>` | **No** — CLI rejects `--base` + `[PROMPT]` |
-| `branch` | `--base <baseBranch>` | **No** — CLI rejects `--base` + `[PROMPT]` |
-| `commit` | `--commit <sha>` | Yes |
-| `uncommitted` | `--uncommitted` | Yes |
+| Target | Flags |
+|---|---|
+| `pr` | `--base <baseRefName>` |
+| `branch` | `--base <baseBranch>` |
+| `commit` | `--commit <sha>` |
+| `uncommitted` | `--uncommitted` |
 
-**Codex CLI prompt-vs-flag conflict.** As of codex 0.x, `codex review --base <branch> [PROMPT]` exits 2 with:
+Run codex with a single background Bash call (run_in_background: true, timeout 600000 ms):
 
-```
-error: the argument '--base <BRANCH>' cannot be used with '[PROMPT]'
-```
-
-So **for `pr` and `branch` targets we do not pass the custom prompt** — codex runs in default review mode against the base. The trade-off (codex sees no AGENTS.md-conformance preamble) is accepted because the alternative — silent exit 2 with a zero-byte review file — is strictly worse. For `commit` and `uncommitted` targets the prompt is still passed (no `--base`, no conflict).
-
-Prompt body (used only for `commit` / `uncommitted` targets; substitute `<display phrase>`):
-
-```
-You may encounter `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`.
-
-Do not treat that as a review result. Per the active tool policy, if an important command fails due to sandboxing, rerun that command with `sandbox_permissions: "require_escalated"` and include a short justification. `gh` may be unsandboxable, so attempt it normally only if required by policy, then request escalation after the sandbox failure.
-
-Review <display phrase> in code-review mode:
-1. Identify the behavioral contract changed by the PR.
-2. Inspect the diff and relevant surrounding code.
-3. Search for dependents and sibling paths.
-4. Run focused verification where practical.
-5. Return findings first, ordered by severity, with file/line references.
-6. If no issues are found, say so and list any residual test gaps.
-
-Follow the repo's AGENTS.md instructions, especially ADR conformance and review workflow.
+```sh
+flags=(<each flag and its value as a separate array element, e.g. "--base" "main">);
+codex review "${flags[@]}" > tmp/multi-review/codex-<slug>.md 2> tmp/multi-review/codex-<slug>.stderr;
+rc=$?;
+printf '{"reviewer":"codex","exit":%d,"timed_out":false,"output":"tmp/multi-review/codex-<slug>.md"}\n' "$rc" > tmp/multi-review/codex-<slug>.status.json;
 ```
 
-If focus text exists and isn't exactly `-`, append on a new line: `Additional focus: <focus text>`. (Focus text is dropped for `pr`/`branch` targets along with the prompt — the trade-off above applies.)
-
-**Shell-safe invocation.** Do not interpolate the prompt or focus text directly into the command — `$`, `` ` ``, `"`, and newlines in focus text will break it. Instead:
-
-1. **Prompt-supporting targets only** (`commit`, `uncommitted`): write the assembled prompt to `tmp/multi-review/codex-<slug>.prompt.txt` via the `Write` tool. For `pr` / `branch` skip this — no prompt file is needed.
-2. Run codex with a single background Bash call (run_in_background: true, timeout 600000 ms). The command shape branches on whether the target supports a custom prompt:
-
-   *For `commit` / `uncommitted` (prompt passed):*
-
-   ```sh
-   prompt="$(<tmp/multi-review/codex-<slug>.prompt.txt)";
-   flags=(<each flag and its value as a separate array element, e.g. "--commit" "abc1234">);
-   codex review "${flags[@]}" -- "$prompt" > tmp/multi-review/codex-<slug>.md 2> tmp/multi-review/codex-<slug>.stderr;
-   rc=$?;
-   printf '{"reviewer":"codex","exit":%d,"timed_out":false,"output":"tmp/multi-review/codex-<slug>.md"}\n' "$rc" > tmp/multi-review/codex-<slug>.status.json;
-   ```
-
-   *For `pr` / `branch` (no prompt — CLI conflict):*
-
-   ```sh
-   flags=(<each flag and its value as a separate array element, e.g. "--base" "main">);
-   codex review "${flags[@]}" > tmp/multi-review/codex-<slug>.md 2> tmp/multi-review/codex-<slug>.stderr;
-   rc=$?;
-   printf '{"reviewer":"codex","exit":%d,"timed_out":false,"output":"tmp/multi-review/codex-<slug>.md"}\n' "$rc" > tmp/multi-review/codex-<slug>.status.json;
-   ```
-
-   The trailing `;` per CLAUDE.md guards against the sandbox pipe-drop bug. Keep stderr separate so the output file stays parseable as a review.
+The trailing `;` per CLAUDE.md guards against the sandbox pipe-drop bug. Keep stderr separate so the output file stays parseable as a review.
 
 **Empty-output guard.** After codex finishes, before treating its output as a review, the parent must check: if `exit != 0` or `stat -c %s tmp/multi-review/codex-<slug>.md` reports `0`, mark the status sidecar as `"ok": false` with a reason that includes the exit code and a pointer to the `.stderr` file. The codex CLI prints argument errors to stderr and exits without writing anything to stdout, so a silent zero-byte review file is the failure shape to defend against.
 
