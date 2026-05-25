@@ -45,7 +45,7 @@ Then invoke `superpowers:writing-plans` to produce the implementation plan. Forw
 
 ## Step 2 — Plan review loop
 
-Goal: iterate until **no critical/blocking findings remain** from any reviewer, applying every finding regardless of severity in each round. After the final round (which by definition produces no criticals), do **not** run another review — exit the loop.
+**Stop rule (read this first):** A round runs a review and then applies fixes. Exit the loop as soon as a round's **pre-fix** findings contain no criticals. Do **not** dispatch a follow-up round to verify the fixes from the previous round — the fixes are trusted, and any residual issues are caught later by step 5. The pre-fix critical count is the *only* gate; non-critical findings in a clean round are applied and then the loop ends without another review.
 
 Dispatch a single subagent per round (fresh context per round) with the round's job spelled out:
 
@@ -63,11 +63,14 @@ the stop threshold for this and all subsequent rounds: stop only when no critica
 findings remain (instead of just no-criticals).
 
 Merge findings. Apply every finding regardless of severity by editing the plan file in place.
+
 Report back:
   - Whether codex ran successfully.
-  - Counts of findings by severity, per reviewer.
-  - Whether the stop condition is met after this round's fixes (i.e., the *pre-fix* findings
-    contained no criticals — or no-criticals-and-no-highs if codex is unavailable).
+  - Counts of findings by severity, per reviewer — counted from the *pre-fix* review output,
+    before any edits were applied. Print the explicit critical count (and high count if codex
+    was unavailable).
+  - Do NOT run a second review to confirm your fixes — the orchestrator decides whether to
+    dispatch another round based on the pre-fix counts you report.
 ```
 
 Severity is reviewer-assigned: trust the labels the reviewers print. Treat anything labeled `critical`, `blocking`, `P0`, or equivalent as critical. If a reviewer labels things inconsistently, take the highest severity it assigned for that finding.
@@ -75,9 +78,11 @@ Severity is reviewer-assigned: trust the labels the reviewers print. Treat anyth
 Loop:
 
 1. Dispatch the subagent for round N.
-2. Read its report.
-3. If the **pre-fix** findings for round N contained no criticals (or no criticals+highs in the codex-unavailable case), the loop is done — the fixes from this round are already applied, exit without another round.
+2. Read its report and look at the pre-fix critical count (and pre-fix high count if codex was unavailable this round).
+3. If that count is 0, the loop is **done** — the round's fixes are already applied, exit immediately. Do not dispatch a verification round.
 4. Otherwise increment N and repeat.
+
+Anti-rule: never dispatch round N+1 solely to confirm the fixes from round N landed cleanly. The next round only exists to surface new criticals; if round N's pre-fix already had none, there is nothing to confirm here.
 
 ## Step 3 — Implement (TDD, subagent-driven)
 
@@ -95,7 +100,7 @@ Capture the PR number — the next step needs it.
 
 ## Step 5 — Multi-review loop
 
-Goal: iterate until **no critical findings** from any reviewer, applying every finding regardless of severity each round. After the final clean round, do not run another review.
+**Stop rule (read this first):** A round runs `/multi-review` (which itself runs three reviewers and applies fixes) and then pushes. Exit the loop as soon as a round's **pre-fix** critical count across all reviewers is 0. Do **not** dispatch a follow-up round to verify the fixes from the previous round — the fixes are trusted. The pre-fix critical count is the *only* gate; non-critical findings in a clean round are applied, pushed, and then the loop ends without another review.
 
 Initialize `<repo root>/tmp/review-comparison.md` if it does not exist. The file is a running cumulative log designed to drive **improvements to `custom-review2`** specifically — each entry should be actionable for future skill edits (what custom-review2 missed, what it over-flagged, where its depth fell short of codex or custom-review, where it outperformed them).
 
@@ -122,9 +127,13 @@ Per round:
 
    Apply every finding regardless of severity. Commit fixes with a clear semantic message.
 
+   Do NOT run a second review pass to confirm the fixes — the orchestrator decides whether
+   to dispatch another round based on the pre-fix counts you report.
+
    Report back:
-     - Counts of findings by severity, per reviewer (codex, custom-review, custom-review2).
-     - The pre-fix critical count across all reviewers.
+     - Counts of findings by severity, per reviewer (codex, custom-review, custom-review2) —
+       counted from the *pre-fix* review output, before any fixes were applied.
+     - The pre-fix critical count across all reviewers (explicit number).
      - For the comparison file: per-reviewer observations on accuracy (true vs false positives),
        depth (did they trace data flow / cite file:line / catch semantic gaps), and
        over/underrepresentation. Focus on what custom-review2 specifically did or missed
@@ -164,7 +173,9 @@ Per round:
 
    - **Print a chat summary** of each reviewer's performance for this round (2–4 sentences per reviewer, focusing on accuracy/depth/over-under).
 
-3. **Stop condition:** if the pre-fix critical count for round N was 0, the loop ends — the fixes from this final round are already pushed, no further review is needed. Otherwise increment N and repeat.
+3. **Stop condition:** if the pre-fix critical count for round N was 0, the loop ends immediately — the round's fixes are already pushed, no further review is needed. Do not dispatch a verification round. Otherwise increment N and repeat.
+
+Anti-rule: never dispatch round N+1 solely to confirm the fixes from round N landed cleanly. The next round only exists to surface new criticals; if round N's pre-fix already had none, there is nothing to confirm here.
 
 If codex is unavailable on a given round, do not change the stop threshold here (unlike step 2) — multi-review's two claude reviewers are still authoritative for the critical check.
 
