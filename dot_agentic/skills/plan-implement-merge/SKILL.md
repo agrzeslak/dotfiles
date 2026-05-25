@@ -129,6 +129,22 @@ Per round:
 
    Apply every finding regardless of severity. Commit fixes with a clear semantic message.
 
+   **TDD for fixes — when appropriate:** Before implementing a fix, decide whether a failing
+   unit test should be written first. Add a test first when the finding describes a behavioral
+   bug, an incorrect/missing branch, an off-by-one, a wrong output shape, a regression, a
+   silent layer mismatch, or any other defect whose presence/absence can be expressed as a
+   test assertion against a callable unit. Write the test, watch it fail for the right reason
+   (i.e. the bug the finding describes — not a syntax error or import failure), then implement
+   the fix and watch the test go green. Follow `superpowers:test-driven-development` for the
+   red-green-refactor discipline.
+
+   Skip the test-first step — do not shoehorn ceremony — when the fix is: a pure rename, a
+   comment/docs edit, a formatting/lint change, a dead-code removal, a type-only tweak with
+   no runtime effect, a config/build-script change with no unit-testable surface, a UI/visual
+   change better verified by other means, or a finding already covered by an existing failing
+   test you can point to. In each such case, briefly note in the commit message why a test
+   was not added.
+
    Do NOT run a second review pass to confirm the fixes — the orchestrator decides whether
    to dispatch another round based on the pre-fix counts you report.
 
