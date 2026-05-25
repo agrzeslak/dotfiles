@@ -39,6 +39,8 @@ Record the chosen branch name; later steps need it.
 
 ## Step 1 — Plan
 
+**Before doing anything else in this step: ask me questions until what we want to implement and how is unambiguously clear.** Drive the conversation interactively — surface ambiguities in scope, acceptance criteria, constraints, data shapes, edge cases, and the intended approach, and keep asking until you can restate the goal and the approach back without hedging. Only proceed to brainstorming/planning once that bar is met. (If the user has explicitly told you to skip clarifying questions for this run, honor that and make the most reasonable call instead.)
+
 Invoke `superpowers:brainstorming` first if the argument is an inline description that lacks concrete scope. Skip brainstorming when the argument points to a spec file that already encodes intent, or when the description is unambiguous.
 
 Then invoke `superpowers:writing-plans` to produce the implementation plan. Forward the argument (description or path) as the source material. Let writing-plans choose the plan file path; capture and remember that path — every later step references it.
