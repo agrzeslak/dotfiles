@@ -17,6 +17,12 @@ The cost of acting is asymmetric: deleting in-use work is expensive, deleting cl
 
 `gh` is unsandboxable here: run it with `dangerouslyDisableSandbox: true`, never chained with other commands. Capture its output to a file, then process that file in a sandboxed call.
 
+## Handling failures
+
+Cleanup runs several destructive commands (`gh pr merge`, `git branch -d`, `git push --delete`, `git worktree remove`, `rm`, `git rm`). When one fails — non-zero exit, `ENOTEMPTY`, "not fully merged", a permission error, a refused merge — do not silently swallow it and do not abort the remaining steps. Append a record to `<repo root>/tmp/cleanup.md` (resolve the root with `git rev-parse --show-toplevel`; create `tmp/` if it is missing), then carry on with the rest of the run.
+
+Make each entry actionable on its own: which step you were in, what you were trying to do, the exact command, and the error output verbatim. Surface these failures in the final report and point the user at the log.
+
 ## Step 0 — Orient
 
 Confirm a git repo. Identify the default branch, the current branch, and the PR associated with the current branch (`gh pr view --json number,state,title,body,headRefName`). If no PR exists for the branch, say so and skip to step 3 — there is nothing to merge.
@@ -70,4 +76,4 @@ End with `SESSION.md` reduced to a minimal stub (a header and nothing else) so t
 
 ## Final report
 
-Summarise concisely: PR merged (method), branches/worktrees deleted, branches awaiting the user's call, files deleted vs. left, and SESSION.md disposition (issues opened with numbers, items folded into the plan, items dropped). Surface anything you deliberately did not touch and why.
+Summarise concisely: PR merged (method), branches/worktrees deleted, branches awaiting the user's call, files deleted vs. left, and SESSION.md disposition (issues opened with numbers, items folded into the plan, items dropped). Surface anything you deliberately did not touch and why, and any actions that failed — point the user at `tmp/cleanup.md` if it was written.
