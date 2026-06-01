@@ -1,6 +1,6 @@
 # Output format
 
-Read during the Review phase before drafting the final review. This file fixes the severity definitions, finding shape, ordering, coverage footer, skip list, and the zero-findings honesty rule.
+Read before workflow step 8 (write the rendered review). This file fixes the severity definitions, finding shape, ordering, coverage footer, skip list, and the zero-findings honesty rule.
 
 The output rules are written as **hard prohibitions** where Codex's interview was emphatic. Treat them as gates, not suggestions.
 
@@ -38,6 +38,35 @@ Minor confirmed defects: misleading UI copy tied to state, recoverable bad behav
 
 ---
 
+## Severity rubric — procedural vs. semantic
+
+Severity must reflect the kind of defect, not the kind of source it violates. R6 fixer critique on v1: *"the doc-table-stale finding is rated Medium primarily on the strength of AGENTS.md prose, which is more procedural than semantic. The `write_value` rollback bug — command Err but state mutated — is rated Low. That underweights a real 'command Err ⇒ silent state mutation' contract violation."*
+
+**Ordering (highest impact first):**
+
+1. **Observable-wrong-behavior** — the system says or does something materially false to a real user/caller. Floor **Medium**, ceiling **Critical**.
+2. **Silent-state-divergence** — two layers can now disagree without an error surface (cache vs. truth, in-memory vs. on-disk, TUI mirror vs. engine). Floor **Medium**, ceiling **High**.
+3. **Contract-violation-not-yet-visible** — code violates a documented contract (ADR, schema, doc bullet) but the violation hasn't surfaced. Floor **Low**, ceiling **Medium**. Promotes to bands 1/2 once a documented future consumer arrives.
+4. **Procedural-doc-drift** — runtime-model tables, status lists, AGENTS.md prose, comment-precision items that lie about the code. Floor **Low**, ceiling **Medium**.
+5. **Comment-precision** — adjacent docstrings/comments that mis-describe behavior in low-stakes ways. Floor **Low**, ceiling **Low**.
+
+**Hard caps:**
+
+- Doc-bullet contradicting impl with no observable user effect: **Low/Medium ceiling**.
+- Command-Err-but-state-mutated, TUI optimistic flip without rollback, silent subscriber-cache divergence: **High/Medium floor**.
+- Producer-without-wired-consumer ("dead feature shipped"): **High floor** if operator-visible (operator invokes the dead workflow believing it worked); otherwise Medium.
+- Defensive flag with no observable read: **Low** — wasted code, not a bug. Promote to Medium only if the flag's appearance of working masks the read site needed for the actual fix.
+
+**Producer-emits-lie-as-data (runtime-producer false content).** When a producer (engine code, command handler, dispatcher, persistence layer) writes false content into a persisted or operator-observable surface — audit log, `Query::*Detail` response, status line, persisted record, TUI mirror, metric, log key value — the defect is **observable-wrong-behavior**, Medium floor. This is a distinct class from `procedural-doc-drift`: the doc-vs-impl class is "the doc lies about code"; this class is "code emits a lie as data" that a real consumer reads at runtime.
+
+Pre-existing producer code does not lower severity. Scope (whether the fix belongs in this PR) is separate from severity (how wrong the emitted value is). A pre-existing producer that is now amplified or made consumer-visible by this PR's changes remains Medium floor; deferral is a scope decision, not a calibration decision.
+
+When in doubt between adjacent bands, ask: *what does the user / operator / next-developer see when the failure occurs?* The visible outcome decides the band.
+
+The rubric is an internal calibration aid. The rendered finding does **not** need to label which band it belongs to — the severity prefix `[Critical|High|Medium|Low]` is the output; the band is the rationale.
+
+---
+
 ## Finding shape
 
 Every finding renders as:
@@ -47,10 +76,15 @@ Every finding renders as:
 
 When <condition>, this code does <wrong behavior> because <mechanism>, causing <impact>.
 
+[Render proof: <one-sentence trace of the render path through suspend/restore/mount semantics, with file:line for each step. For prompt-command / keybinding / MCP-tool / CLI dispatch-failure findings, the dispatch chain (binding → emitter → engine receiver → handler) at file:line for each hop satisfies this.>.]
+[Test proof: <test path:line — what the test asserts>.]
+
 Fix direction: <one sentence>.
 
 Related sites: file:LINE, file:LINE.   (omit this line if no related sites)
 ```
+
+The `Render proof:` / `Test proof:` lines appear **only on visibility-dependent findings**. Other findings omit them. Their presence on a finding is what enforces the visibility-dependent finding-shape rule from `SKILL.md` — a visible-impact candidate without one of these proof lines is not a finding. The dispatch-chain carve-out (SKILL.md § *Visibility-dependent findings*) admits prompt-command / keybinding dispatch-failure findings using the dispatch chain as the render-path equivalent.
 
 Required components — if any are absent, the finding is not yet a finding:
 
@@ -63,6 +97,23 @@ Required components — if any are absent, the finding is not yet a finding:
 7. **Impact** — what the user / data / system / caller observes. Concrete consequence, not "could lead to issues."
 8. **Fix direction** — one sentence pointing at where to fix and how. **Not** a complete rewrite. Not a `diff`. The author still owns the fix.
 9. **Related sites** (optional) — other file:line locations exhibiting the **same root cause**. Used to group same-cause findings into one entry.
+10. **Render proof / Test proof** (only for visibility-dependent findings) — see above.
+
+### Producer-claim finding shape
+
+A finding about a producer whose value doesn't reach the consumer's actual read site must name producer / produced value / actual read site / actual source of truth at the read site / observable effect — all in the prose. Example:
+
+> `src/editor.rs:120` writes `agent_permissions` to `config.toml`, but the command path at `src/engine.rs:211` constructs permissions from `AgentPermissionsConfig::default()` instead of reading that file. So `Ctrl+G` saves successfully while the engine continues using defaults.
+
+No schema, no multi-field record. The sentence carries the structure.
+
+### Claim-vs-reality finding shape
+
+For findings whose defect is *"the codebase claims something false"* (comment overstates code; doc bullet contradicts impl; defensive flag with no observable read; stale runtime-model section), the impact statement should be explicit about the audience:
+
+> `docs/runtime-model.md:42` says disconnected agents clear `permissions_filter`, but `src/session.rs:88` only clears it on project reset. The documented runtime model is false; maintainers extending this code will act on it. No user-visible bug today.
+
+Severity for this class caps at Medium (see severity rubric). Promote to High only if a documented future consumer is in the same PR and the false claim will mislead them.
 
 ---
 
@@ -147,23 +198,20 @@ The coverage section is mandatory. It anchors the review's claims by stating wha
   - `rg '<term1>|<term2>' --type ts`
   - `npm test -- src/auth/` (passed / failed: ...)
   - <every command actually executed>
-- **Subagents used:**
-  - Completeness audit — found 2 missing surfaces.
-  - Sibling discovery — returned 4 candidates, 3 inspected.
-  - Adversarial verification — 5 candidates submitted; 3 held, 1 narrowed, 1 dropped.
-  - (omit subagents that didn't run)
+- **Subagents used:** <if any spawned per SKILL.md *Subagents* triggers — name them and what they returned. Omit the bullet entirely if none ran.>
+- **Falsifications:** N attempted across C claims; K promoted, M disproved, R residual / open. Break down per claim only when N ≥ 10 OR the review has zero promoted findings.
 - **Not checked:** <what was deliberately or unavoidably out of scope, with reason — e.g. `mobile/` excluded by operator focus directive; `vendor/` excluded as generated>.
 - **Residual risk:** <items that could still go wrong that this review didn't close — typically low-confidence Low-severity observations, or known-unknowns>.
 - **Test gaps:** <missing test coverage that matters for the change>.
 ```
 
-If the Verification phase dropped candidates, optionally surface a count: *"5 candidate findings dropped at verification (see `tmp/custom-review-<ts>/verification.md` § Dropped candidates)."*
+The **Falsifications** line is derived mechanically from `notes.md`: `N` counts all `falsifications:` bullets; `M` counts bullets tagged `disproved`; `K` counts `reachable-defect` bullets whose corresponding `Kn` ended `status=verified-finding-Fn`; `R` counts bullets tagged `open-question` plus `reachable-defect` bullets whose corresponding `Kn` ended `status=open-question-OQn` or was rendered only as Residual risk. The reviewer does not write these numbers from intuition.
 
 ---
 
 ## Zero-findings rule
 
-If after all phases no candidate survived verification, write the review explicitly:
+If no candidate survived to a finding, write the review explicitly:
 
 ```
 # Custom Review — <target>
@@ -173,27 +221,23 @@ If after all phases no candidate survived verification, write the review explici
 No verified bugs found across this diff at the verification bar applied.
 
 ## Open questions
-<list>
+<list, or omit the section if empty>
 
 ## Coverage
 <full coverage section as above>
-
-## Residual risk
-<list>
-
-## Test gaps
-<list>
 ```
+
+(Residual risk and Test gaps live inside the Coverage section; they are not separate top-level sections.)
 
 **Do not pad** with low-confidence suggestions to look productive. An honest empty review is a feature.
 
-If after all phases you have **nothing** in findings, Open Questions, Residual Risk, AND Test Gaps — that itself is suspicious. Re-examine the Falsification phase: did you genuinely enumerate ≥3 falsifications per claim, or did you write "checked: no issue" too quickly? Re-do the Falsification phase for the claim with the broadest blast radius.
+If you have **nothing** in findings, Open Questions, Residual Risk, AND Test Gaps — that is suspicious. Return to workflow step 5 and run sideways search harder on the claim with the broadest blast radius.
 
 ---
 
 ## Finding minimality discipline
 
-If you have many verified findings after the Verification phase:
+When many candidates survived:
 
 1. **Group by root cause** first. Five symptoms of one bug = one finding with five `related_sites`.
 2. **Drop Low items** that don't materially help the author. Move them to Residual Risk.

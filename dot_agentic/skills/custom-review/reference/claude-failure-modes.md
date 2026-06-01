@@ -1,138 +1,50 @@
 # Claude failure modes
 
-Eleven archetypes of reviews that miss bugs. Read during the Falsification phase and again during the Review-phase preflight. These are not generic anti-patterns — they are the **specific failure modes Codex identified** in Claude reviews on real diffs.
+Fourteen archetypes of Claude reviews missing bugs. Read at workflow step 7 — for each candidate about to promote, run down the table and ask whether the candidate is immune to each mode. If one or two feel load-bearing, return to the named workflow step before promoting.
 
-For each, the failed phase is named so the SKILL.md preflight can route a "no" answer back to the correct phase.
+## The table
 
----
+| # | Mode | Failed step | Single-line cue |
+|---|---|---|---|
+| 1 | Stopped at local correctness | 5 (search sideways) | Changed function looks reasonable; bug is in a caller/serializer/export/admin path. |
+| 2 | Trusted tests as correctness evidence | 6 (read tests) | Tests pass because the fixture made the regression impossible to fail. |
+| 3 | Believed the PR description | 3 (claims) + 5 (sideways) | "No behavior change" treated as proof; refactor-claim was not falsified. |
+| 4 | Did not enumerate alternate code paths | 5 (sibling axes) | Reviewed create but not edit; admin but not user; single but not bulk. |
+| 5 | Skipped error / loading / empty paths | 5 (failure-state parity) | Refactor preserves success rendering, drops the error branch. |
+| 6 | Did not search producers and consumers | 5 (search sideways) | New enum variant/status/edge type handled in the visible site, missed by sibling producer/consumer. |
+| 7 | Reported suspicions without verification | 7 (finding-promotion) | "Possible stale state" / "may need cleanup" in a finding — should be Open Question or dropped. |
+| 8 | Missed async invalidation | 5 (async invalidation) | New requests work, but old requests aren't cancelled on state change. |
+| 9 | Confused UI gating with authorization | 5 (UI vs server) + 7 (promotion) | Button is hidden, action treated as protected, server still accepts the call. |
+| 10 | Missed old data / rollout compatibility | 5 (backward-compat) | Migration / new branch evaluated only against ideal new data. |
+| 11 | Overweighted cleanliness | 8 (output) | Review has 12 entries; 9 are style/naming/extraction; the real bug is buried. |
+| 12 | Read the diff as self-contained (v2) | 3 (claims) + 7 (producer-claim shape) | Producer looks correct; the actual read site reads `Default::default()` / fallback / stale cache. |
+| 13 | Trigger-shy on claim-vs-reality (v2) | 7 (claim-vs-reality finding-shape) | Reviewer notices a comment lying; drops because "headline bug isn't reachable through it." |
+| 14 | Render-lifecycle elided (v2) | 7 (visibility finding-shape) | "Modal renders under editor" without proving the alt-screen suspend/restore actually re-renders. |
 
-## 1. Stopped at local correctness
+## Detailed examples — the modes that drove the v2 design changes
 
-The changed function looks reasonable, so the review ends there. The bug is in a caller, serializer, export path, or alternate UI that still expects the old behavior.
+Modes 12, 13, and 14 are the v2-specific gates encoded as finding-promotion rules in `SKILL.md`. The table is enough for modes 1–11 (they were Codex's enumeration; their fix is embedded in the workflow steps). The three v2 modes deserve a fuller treatment because they fire across PRs the reviewer has seen many times.
 
-> Typical miss: a field shape changes. The primary page updates. CSV export, admin view, or background job still uses the old field.
+### 12. Read the diff as self-contained
 
-**Failed step:** Search phase — trace did not extend past the changed lines, or hit classification did not include dependent roles.
+The reviewer treats the changed files as the universe of the review. For a new producer (writer, dispatch arm, editor, settings store), the question *"what does the consumer actually read at the effect site?"* is never asked. The producer looks correct in isolation. The consumer either defaults to an unrelated source of truth, is itself unwired, or reads through a dead code path.
 
----
+> R10 P1: a new editor writes `config.toml`. `Ctrl+g` saves successfully. The engine command that should read the new file resolves against `AgentPermissionsConfig::default()` instead. The feature ships dead. The diff looked self-contained; the dead-wired consumer was outside the changed files.
 
-## 2. Trusted tests as correctness evidence
+Other instances: R2 P2, R6 assemble-invariant, R7 TUI rollback. Codex catches this class uniquely (4 of its 7 highest-leverage finds across R1/R2/R6/R7/R10). The v2 producer-claim finding-shape forces the question. The trap is a named consumer that reads `Default::default()` or an unrelated config — a named consumer that doesn't actually read the produced value is theater. Deliberately search: `Default`, `default()`, `unwrap_or_default`, fallback constructors, old config paths, old enum arms.
 
-Tests are treated as proof rather than another artifact to review. Tests can encode the regression, use fixtures that hide the issue, or assert only the happy path.
+### 13. Trigger-shy on claim-vs-reality
 
-> Typical miss: test data uses the same fake ID for `workspaceId` and `organizationId`. A semantic ID mixup passes.
+The reviewer notices that a comment overstates code, a defensive flag has no observable read, or a doc bullet contradicts impl — but drops because *"the headline bug isn't reachable through this comment."* The codebase remains in a state where the comment lies, but the review emits no finding.
 
-**Failed step:** Tests phase — fixture blindness and assertion correctness were not checked.
+> R5: notices `is_file()` doc says "covers unreadable path" while mode-0000 files pass the check. Drops to "residual-risk note" because the historic `os error 2` chain doesn't flow through there. The doc-overclaim remains in the tree.
 
----
+This systematically suppresses custom-review's strongest niche (doc-vs-impl-lies, n=4 across R5/R6/R8/R10). The v2 finding-promotion rule: false-claim → Low. True-claim → drop. Reachability is not the question. The impact statement makes the audience explicit: *"maintainers will act on a false model."*
 
-## 3. Believed the PR description
+### 14. Render-lifecycle elided
 
-If the PR says *"no behavior change,"* the reviewer treats the change as a pure refactor. But refactors often change query enablement, cleanup, loading states, memoization, or error rendering.
+The reviewer correctly traces operation ordering ("mode flip → drain → spawn") but conflates *"operation queued"* with *"user sees outcome."* The candidate is emitted with an impact statement that names a user-visible artifact without tracing the actual render path through suspend/restore, mount/unmount, modal-queue survival, or alt-screen entry/exit.
 
-> Typical miss: extracted child component now fetches on mount because the parent's conditional render was removed.
+> R10 F2 (custom-review's first dataset overstatement): traces that the modal is queued before the editor spawns. Claims the modal renders *under* the editor session. Misses that the alt-screen suspension defers rendering until after the editor returns. The user never sees a modal-under-editor; the candidate is wrong.
 
-**Failed step:** Model phase — refactor-claims were not treated as falsifiable claims; Falsification phase — did not target behavioral drift (query enablement, side effects, error rendering, memoization).
-
----
-
-## 4. Did not enumerate alternate code paths
-
-The review inspects create but not edit, desktop but not mobile, single action but not bulk action, admin but not regular user.
-
-> Typical miss: validation added to create flow but edit flow can still save invalid data.
-
-**Failed step:** Search phase (sibling inspection) — sibling axes were not enumerated.
-
----
-
-## 5. Skipped error / loading / empty paths
-
-The success path survives the review. The old error or loading behavior disappears.
-
-> Typical miss: failed request now renders "no results," which tells the user a false state and suppresses retry affordance.
-
-**Failed step:** Falsification phase — `failure_parity` sub-check was not addressed.
-
----
-
-## 6. Did not search producers and consumers
-
-A new enum variant, status, edge type, or permission gets handled in the visible location but not everywhere.
-
-> Typical miss: frontend can display a new status, but server-side filtering excludes it because the query predicate still enumerates the old statuses.
-
-**Failed step:** Search phase — hit classification did not cover both producer and consumer roles, or did not classify hits exhaustively.
-
----
-
-## 7. Reported suspicions without verification
-
-The opposite failure: the reviewer reports *"possible stale state"* or *"may need cleanup"* without proving a path. This degrades trust and hides real bugs among maybe-comments.
-
-> Typical pattern: review contains 8 findings, of which 5 are hedged with `maybe` / `possibly` / `seems`. The hedged ones are noise.
-
-**Failed step:** Verification phase — main-thread re-read did not drop unverified candidates; Review-phase output rules — hedging language was not stripped.
-
----
-
-## 8. Missed async invalidation
-
-The reviewer checks that new requests work, but not that old requests are cancelled or ignored when state changes.
-
-> Typical miss: user clears a search. An older request resolves and repopulates stale results.
-
-**Failed step:** Falsification phase — `async_invalidation` sub-check was not addressed, or was filled with `N/A` without justification.
-
----
-
-## 9. Confused UI gating with authorization
-
-If the button is hidden, the reviewer treats the action as protected. Server-side enforcement still needs to be checked.
-
-> Typical miss: frontend hides delete for non-owners. The backend endpoint accepts any project member.
-
-**Failed step:** Search phase — `ui-render` hits were not differentiated from `permission` hits; Falsification phase — did not separately attack the server-side authorization boundary.
-
----
-
-## 10. Missed old data and rollout compatibility
-
-The reviewer evaluates new code against ideal new data. Existing rows, old clients, partial deployments, and saved configs are where bugs surface.
-
-> Typical miss: migration assumes every account has at least one event. Production has accounts without events.
-
-**Failed step:** Falsification phase — `backward_compat` sub-check was not addressed.
-
----
-
-## 11. Overweighted cleanliness
-
-The review spends budget on naming, duplication, or *"consider extracting"* comments. These consume attention that should go to contracts, dependents, and edge paths.
-
-> Typical pattern: review has 12 entries. 9 are style / naming / extraction. 1 actual bug is buried at position 7.
-
-**Failed step:** Review-phase output rules — skip list was not applied; finding minimality rule was not enforced.
-
----
-
-## Use at the Review-phase preflight
-
-The SKILL.md's eleven-question preflight maps directly to these failure modes:
-
-| Preflight question | Failure mode |
-|---|---|
-| Q1 (sources of truth) | (none — separate gate) |
-| Q2 (extended past local correctness) | 1 |
-| Q3 (tests as artifact not proof) | 2 |
-| Q4 (refactors as claims) | 3 |
-| Q5 (sibling axes) | 4 |
-| Q6 (error/loading/empty paths) | 5 |
-| Q7 (producers + consumers) | 6 |
-| Q8 (dropped unverified) | 7 |
-| Q9 (async invalidation) | 8 |
-| Q10 (UI gating vs server auth) | 9 |
-| Q11 (backward-compatibility) | 10 |
-| (no preflight q) | 11 (finding minimality — checked in output assembly) |
-
-If any preflight question is "no," return to the named phase.
+The v2 visibility-dependent finding-shape requires `Render proof:` (one-sentence trace of the render path with file:line at each step) or `Test proof:` (citation of a test asserting the visible outcome). No proof line → not a finding. The candidate drops or moves to Open Questions if the uncertainty itself is Critical/High.

@@ -57,6 +57,10 @@ Severity must reflect the kind of defect, not the kind of source it violates. R6
 - Producer-without-wired-consumer ("dead feature shipped"): **High floor** if operator-visible (operator invokes the dead workflow believing it worked); otherwise Medium.
 - Defensive flag with no observable read: **Low** — wasted code, not a bug. Promote to Medium only if the flag's appearance of working masks the read site needed for the actual fix.
 
+**Producer-emits-lie-as-data (runtime-producer false content).** When a producer (engine code, command handler, dispatcher, persistence layer) writes false content into a persisted or operator-observable surface — audit log, `Query::*Detail` response, status line, persisted record, TUI mirror, metric, log key value — the defect is **observable-wrong-behavior**, Medium floor. This is a distinct class from `procedural-doc-drift`: the doc-vs-impl class is "the doc lies about code"; this class is "code emits a lie as data" that a real consumer reads at runtime.
+
+Pre-existing producer code does not lower severity. Scope (whether the fix belongs in this PR) is separate from severity (how wrong the emitted value is). A pre-existing producer that is now amplified or made consumer-visible by this PR's changes remains Medium floor; deferral is a scope decision, not a calibration decision.
+
 When in doubt between adjacent bands, ask: *what does the user / operator / next-developer see when the failure occurs?* The visible outcome decides the band.
 
 The rubric is an internal calibration aid. The rendered finding does **not** need to label which band it belongs to — the severity prefix `[Critical|High|Medium|Low]` is the output; the band is the rationale.
@@ -72,7 +76,7 @@ Every finding renders as:
 
 When <condition>, this code does <wrong behavior> because <mechanism>, causing <impact>.
 
-[Render proof: <one-sentence trace of the render path through suspend/restore/mount semantics, with file:line for each step>.]
+[Render proof: <one-sentence trace of the render path through suspend/restore/mount semantics, with file:line for each step. For prompt-command / keybinding / MCP-tool / CLI dispatch-failure findings, the dispatch chain (binding → emitter → engine receiver → handler) at file:line for each hop satisfies this.>.]
 [Test proof: <test path:line — what the test asserts>.]
 
 Fix direction: <one sentence>.
@@ -80,7 +84,7 @@ Fix direction: <one sentence>.
 Related sites: file:LINE, file:LINE.   (omit this line if no related sites)
 ```
 
-The `Render proof:` / `Test proof:` lines appear **only on visibility-dependent findings**. Other findings omit them. Their presence on a finding is what enforces the visibility-dependent finding-shape rule from `SKILL.md` — a visible-impact candidate without one of these proof lines is not a finding.
+The `Render proof:` / `Test proof:` lines appear **only on visibility-dependent findings**. Other findings omit them. Their presence on a finding is what enforces the visibility-dependent finding-shape rule from `SKILL.md` — a visible-impact candidate without one of these proof lines is not a finding. The dispatch-chain carve-out (SKILL.md § *Visibility-dependent findings*) admits prompt-command / keybinding dispatch-failure findings using the dispatch chain as the render-path equivalent.
 
 Required components — if any are absent, the finding is not yet a finding:
 
@@ -195,10 +199,13 @@ The coverage section is mandatory. It anchors the review's claims by stating wha
   - `npm test -- src/auth/` (passed / failed: ...)
   - <every command actually executed>
 - **Subagents used:** <if any spawned per SKILL.md *Subagents* triggers — name them and what they returned. Omit the bullet entirely if none ran.>
+- **Falsifications:** N attempted across C claims; K promoted, M disproved, R residual / open. Break down per claim only when N ≥ 10 OR the review has zero promoted findings.
 - **Not checked:** <what was deliberately or unavoidably out of scope, with reason — e.g. `mobile/` excluded by operator focus directive; `vendor/` excluded as generated>.
 - **Residual risk:** <items that could still go wrong that this review didn't close — typically low-confidence Low-severity observations, or known-unknowns>.
 - **Test gaps:** <missing test coverage that matters for the change>.
 ```
+
+The **Falsifications** line is derived mechanically from `notes.md`: `N` counts all `falsifications:` bullets; `M` counts bullets tagged `disproved`; `K` counts `reachable-defect` bullets whose corresponding `Kn` ended `status=verified-finding-Fn`; `R` counts bullets tagged `open-question` plus `reachable-defect` bullets whose corresponding `Kn` ended `status=open-question-OQn` or was rendered only as Residual risk. The reviewer does not write these numbers from intuition.
 
 ---
 

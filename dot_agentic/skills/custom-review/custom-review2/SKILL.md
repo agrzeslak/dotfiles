@@ -75,6 +75,7 @@ Read, in order:
 - Repo-root `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` (or `CONTRIBUTING.md` if present).
 - For `pr` target: PR title and body via `gh pr view <num> --json title,body`.
 - Any `ADR-*.md`, `docs/adr/`, `docs/decisions/`, `docs/rfcs/`, `docs/specs/` files **touched by the diff or named in the PR body**.
+- **Plan / spec / implementation-plan / roadmap docs landed in the diff** — read their prose as claims about the code shipping alongside them, not as inert narrative. Their bullets are first-class `claim-vs-reality` targets (see `reference/bug-patterns.md` #16); on contracts-only / doc-heavy PRs they are often where the only finding lives.
 - Each touched migration / schema file in full (`*.sql`, `prisma/schema.prisma`, `*_pb.proto`, `models.py`, etc.).
 - **The `cue` column of `reference/claude-failure-modes.md`** (full table, single-line cues only) — primes the sideways search at step 7.
 - **The class-triggered lookup table at the top of `reference/bug-patterns.md`** — note which classes the diff will touch; full sections are read at step 6.
@@ -116,6 +117,16 @@ Each claim block carries:
   ```
   Start the row with `actual-read-site` and `source-of-truth-at-read` deferred to step 7; finalize after sideways search. A finalized row that reveals the consumer reads `Default::default()`, `unwrap_or_default`, an unrelated config, a stale cache, or a dead branch — or no consumer at all — is the producer-dead class (R10 P1, R6 assemble, R7 TUI rollback). Promote a candidate immediately.
 
+**Concrete planned realization (dormant producer with named activation surface).** If a `producer-realization:` line finalizes to no current `actual-read-site`, but the PR text or diff structure shows this arm is the canonical implementation for a named upcoming surface, promote correctness defects in the arm to findings (severity per activation impact), not Residual Risk. The "concrete impact at file:line" gate reads as *"impact lands when the planned consumer ships,"* not *"impact lands today."* This rule overrides the no-consumer dead-state default only for concrete planned realization; without the evidence below, dormant arms stay dead-state / Residual Risk per the existing default.
+
+Evidence of concrete planned realization, any one of:
+- The PR description or commit message names a stacked next PR.
+- The diff adds carrier fields (struct fields, enum variants, command arms) whose names or placement tie them to a named upcoming surface, even though no operator-facing consumer exists yet.
+- Working-plan tests, named test files, or `TODO(next-pr)` comments pinpoint the activating surface.
+- Staged call sites: the diff contains the code that will be wired in the next PR, marked with `#[allow(dead_code)]`, `pub(crate)` exports with no internal callers, or sibling helpers staged alongside the producer.
+
+Without any of these, correctness defects inside a dormant arm stay Residual Risk / dead-state unless there is a separate current false claim about the arm. The trigger is concrete planned realization, not "every defensive branch."
+
 ### 6. Falsifications & sub-checks (≥3 + four sub-checks per claim)
 
 For each claim in `## Claims`, write **≥3 falsification lines** plus four sub-check lines. Each falsification has a result tag (`disproved` / `reachable-defect` / `open-question`) with a one-line reason. Each sub-check is one of `finding | checked-no-issue | N/A reason=...`:
@@ -125,7 +136,7 @@ For each claim in `## Claims`, write **≥3 falsification lines** plus four sub-
 - `async_invalidation` — every event that should cancel in-flight work, not just replacement requests.
 - `deletion_orphans` — for deletion-claims, what still references the removed thing (docs, metrics, configs, flags, monitoring, tests, generated code).
 
-Before writing falsifications, **read the bug-patterns sections triggered by this diff's classes** (typically 2–4 of the 17) from `reference/bug-patterns.md`. Prime attention; do not tick mechanically.
+Before writing falsifications, **read the bug-patterns sections triggered by this diff's classes** (typically 2–4 of the 19) from `reference/bug-patterns.md`. Prime attention; do not tick mechanically.
 
 `inconclusive` may appear transiently but must resolve to `disproved` / `reachable-defect` / `open-question` before step 8.
 
@@ -146,15 +157,27 @@ Use the results to:
 
 Stop expanding when remaining paths no longer cross a changed contract boundary.
 
+**`cargo doc` regression check (cross-module item-move trigger).** When the diff relocates `pub` or `pub(crate)` items with `///` docstrings across module / file boundaries (god-file split, hub-module reorganization, refactor that introduces newly-created modules), run `cargo doc` against the worktree and diff the warning count vs. master. The class is rustdoc intra-doc links that previously resolved within one module but now resolve across a private boundary — invisible to byte-identity diffs, clippy, and most CI gates.
+
+New `rustdoc::private_intra_doc_links` / `rustdoc::broken_intra_doc_links` / unresolved-link warnings ARE findings:
+- **Low** if the broken doc link is on an internal (`pub(crate)` or private) item only maintainers see.
+- **Medium** if the broken doc link is on a `pub` item — the published API surface now ships a misleading docstring.
+
+Pre-existing warnings unchanged in count are out of scope. Compare counts (and categories), not absolute presence.
+
+**Trigger:** any refactor whose diff moves `pub` / `pub(crate)` items with `///` docstrings between modules or files. PR #183 demonstrated this is the only lens that catches the class — 7 consecutive clean refactor PRs (#177–#184) and the only true positive came from this check.
+
 ### 8. Read tests as artifacts + build the candidate ledger
 
 For every test file touched by the diff AND every test file discovered while tracing claims at steps 6–7:
 
-- **Fixture blindness:** what does the fixture make impossible to fail?
+- **Fixture blindness:** what does the fixture make impossible to fail? Two sub-cases:
+  - **Value-masking:** a fixture that pre-assigns inputs which are globally distinct, globally valid, or always-unique can hide a producer's real-world collision/failure mode. For every producer with a falsifiable claim at step 6, ask *"does the fixture feed it values that can never collide / never be malformed / never overlap the way production values do?"* (PR #194 F4: `seed_ws_messages` used globally-unique seq, masking the per-direction-seq collision).
+  - **Producer-bypass:** does any test actually drive the real producer function, or do all fixtures construct the intermediate/output struct directly and never call it? A test that builds the result type by hand and asserts on it exercises nothing the producer does — the producer can ship broken and stay green. For every producer with a step-6 claim, confirm at least one test calls it (PR #203: gutter tests built `FindingGutterIndex` directly and never drove `finding_gutter_index()`, so the status-fold bug shipped green).
 - **Assertion correctness:** does the assertion encode the regression?
 - **Coverage gaps:** which `reachable-defect` lines from step 6 does this test not cover?
 
-A test that *"passes when the bug is present"* (fixture-blindness, wrong-assertion, missing-visible-outcome assertion) is itself a candidate — its severity scales to the underlying defect.
+A test that *"passes when the bug is present"* (value-masking, producer-bypass, wrong-assertion, missing-visible-outcome assertion) is itself a candidate — its severity scales to the underlying defect.
 
 Now write `## Candidates` in `notes.md`. Every `reachable-defect`, `open-question`, sub-check `finding`, finalized-and-dead producer-realization line, ADR-drift hit, test-derived defect, and dead/defensive-state observation gets a `Kn` line. Each line ends with a status:
 - `verified-finding-Fn` (after step 9 promotion)
@@ -191,7 +214,7 @@ Skip for purely local Low findings — the operator's own re-read at step 9 is t
 
 ### 11. Failure-mode preflight & write outputs
 
-Silently answer the 11-question preflight (one line each, internal; not printed to chat). Any "no" returns to the named step and re-runs everything downstream:
+Silently answer the 12-question preflight (one line each, internal; not printed to chat). Any "no" returns to the named step and re-runs everything downstream:
 
 1. (step 2) Did I read CLAUDE.md / AGENTS.md / ADRs, run the ADR drift sweep, and prime patterns?
 2. (step 7) Did I extend past changed lines into producers, consumers, and downstream effects?
@@ -204,6 +227,7 @@ Silently answer the 11-question preflight (one line each, internal; not printed 
 9. (step 6) Did I check async invalidation — every event that should cancel in-flight work?
 10. (step 6 / step 7) Did I separate UI gating from server-side authorization for every permission-touching change?
 11. (step 6) Did I check backward compatibility against old data / old clients / old configs / old enums / cached state / persisted UI state?
+12. (step 8) For every producer with a step-6 claim, did I verify a test actually drives the producer fn (not just constructs its output struct) AND that the fixture exercises its real failure modes rather than pre-assigning values (globally-unique IDs, always-valid inputs, non-colliding counters) that mask them?
 
 Record exactly `preflight: passed` in `## Preflight` once all questions are "yes" and downstream rework is complete. Do not render `review.md` while a `returned-to=<step>` state is open; `returned-to` is transient.
 
@@ -263,6 +287,14 @@ If the finding's impact statement names a user-visible artifact (modal, banner, 
 If neither proof is available, the candidate is not a finding. The default disposition is **drop** (or surface as a one-line Residual Risk in coverage if it has weak Low-severity merit). Move to Open Questions only when the uncertainty itself is Critical/High — i.e. a real possibility of user-visible breakage where the missing render-path/test evidence is what blocks confirmation. This matches the Open Questions policy in `output-format.md` (the safety valve is for high-risk uncertainty, not for "I noticed but couldn't prove" candidates).
 
 This blocks the R10 F2 class: tracing operation order correctly (mode flip → drain → spawn) but conflating *"operation queued"* with *"user sees outcome"* without proving the render path.
+
+**Prompt-command / keybinding dispatch claims.** For findings whose user-visible impact is *"a keybinding produces wrong or no behaviour"* or *"a prompt-command / menu item / MCP tool / CLI subcommand dispatch fails"*, the `Render proof:` requirement is satisfied by citing the **dispatch chain**: the operator-facing binding → command emitter → engine-command receiver → producing handler, at file:line for each hop. The dispatch chain IS the render-path equivalent for this class — no need to trace through to a TUI redraw.
+
+`Test proof:` may cite a unit test of any hop in the chain.
+
+This is **NOT** a general gate relaxation. It applies only to findings whose impact is *dispatch failure* (binding fires but the command is rejected, no-ops, targets a stale ID / pane / context, or the precondition is never realized). For findings about *what the screen draws after dispatch succeeds* (stale status line, missing modal, wrong list contents, render artefact), the original `Render proof:` requirement still applies.
+
+This addresses the PR #158 round-1 miss class: codex caught four real P2 dispatch bugs (dead `t` binding, dead `j/k` Listener-tab bindings, `scope_selected` never auto-selects, non-Proxy-pane data wipe) that satisfied condition + behaviour + impact at file:line but were rejected because the impact was *"operator presses a key and nothing happens"* rather than a screen-draw claim. The dispatch-chain carve-out admits this class without admitting screen-render hedging.
 
 ### Claim-vs-reality findings (doc / comment / dead-state)
 
@@ -383,7 +415,7 @@ Read at the points named in the workflow, not as optional context.
 | File | Read when | Purpose |
 |---|---|---|
 | `reference/notes-file.md` | Before step 3 (enumerate surfaces) | Mandatory `notes.md` template + class taxonomy for the candidate ledger. |
-| `reference/bug-patterns.md` | Class-triggered lookup table at step 2; triggered full sections at step 6 (falsifications) | 17 heuristics priming attention to specific bug classes — read 2–4 sections per review. |
+| `reference/bug-patterns.md` | Class-triggered lookup table at step 2; triggered full sections at step 6 (falsifications) | 19 heuristics priming attention to specific bug classes — read 2–4 sections per review. |
 | `reference/claude-failure-modes.md` | Cue column at step 2; full archetype 12–14 detail consulted at step 9 if a candidate fits one of those classes | 14 archetypes of Claude reviews missing bugs — cues prime sideways search; detail catches blind spots before promotion. |
 | `reference/output-format.md` | Before step 11 (write `review.md`) | Severity rubric, finding shape, skip list, coverage footer, zero-findings rule. |
 

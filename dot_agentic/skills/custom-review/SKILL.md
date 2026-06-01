@@ -1,400 +1,373 @@
 ---
-name: custom-review
-description: Use when an in-depth correctness review of pending code is wanted — PR/diff review, implementation QA, ADR/spec compliance checks, regression hunting, "is this change safe to merge", or review-style questions about whether code changes are safe. Performs a read-only review that forces depth before findings — claims are stated, falsified, verified at file:line, and only verified findings reach the printed review. Every finding lives somewhere on disk; unverified suspicions are dropped, not hedged. Heavier than `/review`; use when depth matters more than speed.
+name: custom-review2
+description: Use when an in-depth correctness review of pending code is wanted — PR/diff review, implementation QA, ADR/spec compliance checks, regression hunting, "is this change safe to merge", or review-style questions about whether code changes are safe. Performs a read-only review that promotes findings only when proof of condition, wrong behavior, and concrete impact lives at file:line. Producer-claims must name the actual source of truth at the effect site; user-visible claims must cite a render path or test; doc/comment/dead-state claims are gated on whether the codebase currently claims something false. Unverified suspicions drop to Open Questions or are discarded. Heavier than `/review`; use when depth matters more than speed.
 ---
 
-# Custom Review
+# Custom Review (v2)
 
-A read-only review whose job is **force review depth before findings**. The skill runs seven ordered phases, each producing one named artifact under `tmp/custom-review-<timestamp>/`. The final rendered review prints only what survived literal re-read at the cited file:line; unverified suspicions are dropped.
+A read-only review with **two review artifacts and one diff capture**: `notes.md` is the enforcement substrate (mandatory; mandatory inline structure forces falsification depth, candidate accounting, severity anchoring, and return loops); `review.md` is the rendered output. `diff.patch` is a supporting capture, not a review artifact.
 
-## Core rule
+The v1 skill wrote seven artifact files. The v2-1 (this) version collapses that to two review artifacts while preserving v1's anti-skipping enforcement — what was paperwork in v1's pipeline becomes mandatory inline sections in a single notes file. Empirical lesson from R11/R12: making the ledger optional and dropping per-claim falsification depth turned the skill into a shallower variant of itself; this version restores both without the seven-file ceremony.
 
-Do not review the diff as isolated edited lines. First identify the behavior, contract, or invariant the change claims to preserve or introduce. Then try to falsify that claim across callers, producers, consumers, persistence, async state, permissions, docs, ADRs, tests, and sibling implementations. A finding exists only when you can name **the condition, the actual wrong behavior, and the concrete impact**, with file:line evidence you have re-read.
+## Core principle
+
+Do not review the diff as isolated edited lines. First identify the behavior, contract, or invariant the change claims to preserve or introduce. Then try to falsify that claim by tracing producer → actual source of truth at the effect site → user/operator observable. A finding exists only when you can name **the condition, the actual wrong behavior, and the concrete impact**, with file:line evidence you have re-read at every link.
+
+The reviewer optimizes for *not emitting unproven findings*, but with explicit anti-trigger-shy machinery: every reachable-defect line is committed to the candidate ledger before it can be dropped, and every drop reason is written. Unverified suspicions become Open Questions only when the uncertainty itself is high-risk — they do not become hedged findings.
 
 ## Read-only
 
 You MUST NOT modify any file outside `tmp/custom-review-<timestamp>/`. You MUST NOT switch branches, stash, reset, checkout, or otherwise alter the working tree.
 
-You MAY: read any file, run `git`, `grep`, `rg`, run tests/typecheck/lint/builds when likely to surface signal (treat results as artifacts, never as proof), write artifact files under `tmp/custom-review-<timestamp>/`.
+You MAY: read any file, run `git`, `grep`, `rg`, run tests/typecheck/lint/builds when they would surface signal (treat results as evidence, never as proof), write the mandatory `notes.md` and `review.md` (and the supporting `diff.patch`) under `tmp/custom-review-<timestamp>/`.
 
 You MUST NOT: edit any file outside `tmp/custom-review-<timestamp>/`, auto-fix anything you find, run `git checkout`, `git switch`, `git stash`, `git reset`, `git restore`, `git clean`, or any command that mutates working-tree state.
-
-## Discipline rules
-
-These apply throughout every phase:
-
-- **Artifacts are evidence, not paperwork.** Every entry carries reasoning, citation, or grep output — not summary. A surface with no hits gets one line, not a paragraph. A reviewer can satisfy seven files mechanically while reasoning poorly; don't. Volume is not quality.
-- **Artifacts prove the search closed; they are not the review.** Do not paste full grep output. Cite line counts and representative lines instead. The artifact's job is to document that the work happened, not to reproduce it.
-- **Forbidden marker values.** The tokens `todo`, `tbd`, `fixme`, `unclassified`, `unread`, `assumed`, `needs-read`, `verify` (meaning "not yet verified"), and `inconclusive` (outside the transient falsification → verification window) are forbidden **as structured field values** — e.g. `status=needs-read`, `result=tbd`. They are NOT forbidden as substrings of code identifiers, file paths, grep output, quoted comments, or natural-language notes. `verifyToken`, `unreadCount`, or a copied `// TODO: refactor` from the diff are all fine.
-- **Return loops are mandatory.** If a later phase discovers something that invalidates an earlier phase's conclusions, return to that phase and re-do the affected work. Two specific return loops are called out below. The general rule: any new surface, narrowed condition, or contradictory evidence found late must be reflected backward, not appended forward.
 
 ## Hard preconditions
 
 Refuse with a short, clear message if:
 
 1. **No target is determinable** per the resolution table — neither a git-based target nor explicit file paths/snippets.
-2. **Git-based target with empty diff.** For `branch`/`uncommitted`, `git diff <base>...HEAD --stat` (resp. `git status --porcelain`) must be non-empty. For `pr`, `git diff <base_ref>...<head_ref> --stat` (refs from `gh pr view`) must be non-empty. If `<head_ref>` is not present locally, fetch it first: `gh pr checkout <num> --detach` would work but mutates the working tree — instead use `git fetch origin pull/<num>/head:refs/custom-review/pr-<num>` and use that ref as `<head_ref>`. Never switch branches or touch the working tree.
-3. **PR target with unpushed local commits.** For `pr` targets, after resolving `<head_ref>` (branch name) and `<head_oid>` via `gh pr view <num> --json headRefName,headRefOid`, check whether a local branch named `<head_ref>` exists (`git rev-parse --verify --quiet refs/heads/<head_ref>`). If it does and its tip OID is not equal to `<head_oid>`, classify and act on the divergence:
-   - `git merge-base --is-ancestor <head_oid> refs/heads/<head_ref>` exits 0 → local is **ahead** (unpushed commits). Refuse with: `Local branch <name> has N unpushed commit(s); GitHub still shows the old code. Push the commits and re-run.` Print `git log --oneline <head_oid>..refs/heads/<head_ref>` so the operator sees what's unpushed.
-   - `git merge-base --is-ancestor refs/heads/<head_ref> <head_oid>` exits 0 → local is **behind** GitHub. Proceed; GitHub's PR head is the source of truth and the local stale branch is not consulted.
-   - Neither is ancestor of the other → branches have **diverged** (typically a pending force-push or local rebase). Refuse with: `Local branch <name> has diverged from GitHub's PR head (likely pending force-push). Push the rewritten branch (e.g. git push --force-with-lease) and re-run.`
+2. **Git-based target with empty diff.** For `branch`/`uncommitted`, `git diff <base>...HEAD --stat` (resp. `git status --porcelain`) must be non-empty. For `pr`, `git diff <base_ref>...<head_ref> --stat` (refs from `gh pr view`) must be non-empty. If `<head_ref>` is not present locally, fetch it read-only first: `git fetch origin pull/<num>/head:refs/custom-review/pr-<num>` and use that ref. Never switch branches or touch the working tree.
+3. **PR target with unpushed local commits or diverged branch.** After resolving `<head_ref>` (branch name) and `<head_oid>` via `gh pr view <num> --json headRefName,headRefOid`, check whether `refs/heads/<head_ref>` exists locally and whether its tip equals `<head_oid>`:
+   - Local **ahead** (`git merge-base --is-ancestor <head_oid> refs/heads/<head_ref>` exits 0): refuse with `Local branch <name> has N unpushed commit(s); GitHub still shows the old code. Push the commits and re-run.` Print `git log --oneline <head_oid>..refs/heads/<head_ref>`.
+   - Local **behind**: proceed; GitHub is source of truth.
+   - **Diverged** (neither ancestor of the other): refuse with `Local branch <name> has diverged from GitHub's PR head (likely pending force-push). Push the rewritten branch and re-run.`
 
-   **Critical:** the branch being checked is the PR's head branch *by name* (`<head_ref>` from `gh pr view`), NOT the operator's currently-checked-out branch. The operator is frequently on `main`/`master` or some other branch when invoking `/custom-review <PR#>` — that branch is irrelevant. Do not substitute `HEAD`, `@{u}`, the current branch, or `git status`'s "ahead/behind" line for this check; those describe the current checkout, not the PR's head branch. Resolve the PR's head branch name explicitly and inspect `refs/heads/<head_ref>` specifically. Also check any worktrees: `git worktree list --porcelain` will reveal if `<head_ref>` is checked out elsewhere — the same `refs/heads/<head_ref>` ref applies regardless of where it's checked out.
+   The branch being checked is the PR's head branch *by name*, NOT the operator's currently-checked-out branch. Resolve and inspect `refs/heads/<head_ref>` specifically. Also check `git worktree list --porcelain` — the same ref applies regardless of where it's checked out. The check uses only `git rev-parse` and `git merge-base --is-ancestor`; nothing is mutated. PR-target only — for `branch`/`commit`/`uncommitted` the local working state IS what gets reviewed.
+4. **PR re-review with stable head + dirty worktree.** When a prior `tmp/custom-review-*/review.md` exists for the same PR at the same `<head_oid>` (compare against the prior `review.md`'s mandatory metadata header — see *Output structure*), run `git status --porcelain` and check whether any modifications touch files in `git diff <base_ref>...<head_ref> --name-only`. If yes, do NOT re-emit prior findings as still-open — review against the worktree state and report: `PR head unchanged since prior review; worktree has uncommitted modifications on N of the diff's files. Reviewing against worktree state. Recommend the operator commit and push these fixes before the next round.` This guards against R7-style stale re-emission. The lookup uses `review.md` since it is the public output; `notes.md` may also be checked for additional context about a prior run.
 
-   The check uses only `git rev-parse` and `git merge-base --is-ancestor`; nothing is mutated. The check is `pr`-only — for `branch`, `commit`, and `uncommitted` targets the local working state IS what gets reviewed, so there is no "stale" mismatch to guard against.
+   **Legacy prior reviews:** ignore any prior `review.md` that does not contain the `custom-review-meta` header block at the top. Those predate this guard and cannot be reliably matched to a `<head_oid>`. Proceed as a fresh review.
 
 ## Target resolution
 
-Parse the operator's trailing text into one of six target types:
-
 | Pattern | Target | Notes |
 |---|---|---|
-| `<number>` or PR URL | `pr` | Resolve head/base ref names via `gh pr view <num>`. Diff command: `git diff <base_ref>...<head_ref>` (three-dot, merge-base). Read files at the PR state via `git show <head_ref>:<path>`. If `<head_ref>` is not local, fetch read-only with `git fetch origin pull/<num>/head:refs/custom-review/pr-<num>` and use that ref. The operator's current branch and working tree are irrelevant — never switch, stash, or checkout. |
-| `against <branch>` / `vs <branch>` | `branch` | Explicit base. |
-| `<40-hex-sha>` or `commit <sha>` | `commit` | Single commit. Diff command: `git diff <sha>^..<sha>` (equivalent to `git diff <sha>^!`). For merge commits this includes changes from all parents; if the operator wants only the first-parent diff (the changes the merge brought in), they must say `commit <sha>^1..<sha>` explicitly. |
-| `uncommitted` / `staged` / `working tree` / `wip` | `uncommitted` | Diff = working tree vs HEAD. |
-| Explicit file paths or globs in the repo | `paths` | Static review of files-as-they-stand. No diff. |
-| Pasted code blocks | `snippet` | Static review of pasted code. No diff. No repo dependent-search. |
+| `<number>` or PR URL | `pr` | Resolve head/base refs via `gh pr view <num>`. Diff: `git diff <base_ref>...<head_ref>` (three-dot, merge-base). Read files at PR state via `git show <head_ref>:<path>`. If `<head_ref>` not local, fetch read-only with `git fetch origin pull/<num>/head:refs/custom-review/pr-<num>`. Never switch branches. |
+| `against <branch>` / `vs <branch>` | `branch` | Explicit base. Diff: `git diff <base>...HEAD`. |
+| `<40-hex-sha>` or `commit <sha>` | `commit` | Diff: `git diff <sha>^..<sha>`. Operator may supply `<sha>^1..<sha>` for merge-commit first-parent diffs. |
+| `uncommitted` / `staged` / `working tree` / `wip` | `uncommitted` | Diff: `git diff HEAD`. |
+| Explicit file paths or globs | `paths` | Static review of files-as-they-stand. No diff. |
+| Pasted code blocks | `snippet` | Static review of pasted code. No diff, no repo dependent-search. |
 | Not in git AND no paths/snippet | (refuse) | Ask operator for paths. |
 | Nothing useful, in git repo | `branch` (default) | Base = `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` || `main`. |
 
-**Trailing focus text.** Operator input that does not match a target spec is treated as an `Additional focus:` directive. It biases the falsification phase (extra falsification attempts targeted at the focus area) and is mentioned in the coverage footer. It does NOT narrow scope — broad-pass phases still run broadly.
+**Trailing focus text.** Operator input that does not match a target spec is treated as an `Additional focus:` directive — biases falsification toward the focus area, mentioned in coverage. It does NOT narrow scope; the broad pass still runs.
 
-If the target is genuinely ambiguous, ask **one** short multiple-choice question.
+For `paths` and `snippet` targets: claims are about what the code currently promises to its callers/users (phrasing drops the "now"). For `snippet`, dependent search is unavailable — note this in coverage. A mandatory caveat appears in the rendered review: *"This review used the `<paths|snippet>` target — no diff was inspected. Behavioral regressions introduced by a prior commit are out of scope."*
 
-### Non-diff target modes (`paths`, `snippet`)
+If the target is genuinely ambiguous, ask one short multiple-choice question.
 
-For `paths` and `snippet`, no diff exists. The phases still run with these substitutions:
+## Workflow
 
-- **Scope:** `target=paths` or `target=snippet`, `identifier=<list of paths or "pasted">`, `base=N/A`. For `snippet`, write the pasted code to `$DIR/inputs/`.
-- **Model:** claims are about what the code **currently promises to its callers/users** — phrasing is `promise=The code promises that <X>.` (drop the "now"). Surfaces have `change=behavior-only`; `old_form` and `new_form` are identical.
-- **Search:** for `paths`, search the rest of the repo for **consumers** of the file's exports. For `snippet`, dependent search is unavailable — record this and skip the closure rule for cross-file hits.
-- **Falsification:** the backward-compat sub-check asks *"is the current code consistent with existing call sites of these exports?"* rather than *"are old data still handled."*
-- **Review:** mandatory coverage caveat — *"This review used the `<paths|snippet>` target — no diff was inspected. Findings concern code-as-it-stands, not a specific change. Behavioral regressions introduced by a prior commit are out of scope."*
+A single-pass review whose discipline lives in the **mandatory `notes.md` structure** (see *Notes file* below). The steps below are numbered; cross-step return loops are listed explicitly and are mandatory when triggered.
 
-`paths` and `snippet` are intentionally fallbacks. Diff-based targets are stronger because they constrain the search space.
+The three files written this skill: `tmp/custom-review-<ts>/diff.patch` (supporting capture), `tmp/custom-review-<ts>/notes.md` (review artifact — enforcement), `tmp/custom-review-<ts>/review.md` (review artifact — output). Only the two `.md` files are review artifacts; `diff.patch` exists so later steps can grep without re-running git.
 
-## Subagent policy
+### 1. Resolve target & save the diff
 
-The main reviewer owns claims, severity, grouping, wording, and whether a finding is real. Subagents gather or challenge evidence; they never produce final findings or final synthesis.
+Per the table above. For diff-based targets, save the raw diff once to `tmp/custom-review-<ts>/diff.patch`. Capture `git diff <base>...<head> --stat` for file/line counts. Note `git status --porcelain` for dirty-worktree state. For PR targets, record `head_ref`, `base_ref`, `head_oid` so later file reads use `git show <head_ref>:<path>`.
 
-**Spawn a subagent only when one of these is true:**
+### 2. Read sources of truth & prime patterns
 
-- `changed_files > 10`
-- `semantic_surfaces > 8`
-- the change crosses a **contract boundary**: API, schema, auth, permissions, serialization, migration, cache, async state, config, feature flag, or a public type
-- any candidate is assessed as Critical or High after the main-thread re-read in the Verification phase (this triggers the adversarial-verification subagent specifically — see Verification phase)
-- the reviewer cannot close a high-risk uncertainty alone
+Read, in order:
 
-**Use subagents only for:**
+- Repo-root `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` (or `CONTRIBUTING.md` if present).
+- For `pr` target: PR title and body via `gh pr view <num> --json title,body`.
+- Any `ADR-*.md`, `docs/adr/`, `docs/decisions/`, `docs/rfcs/`, `docs/specs/` files **touched by the diff or named in the PR body**.
+- **Plan / spec / implementation-plan / roadmap docs landed in the diff** — read their prose as claims about the code shipping alongside them, not as inert narrative. Their bullets are first-class `claim-vs-reality` targets (see `reference/bug-patterns.md` #16); on contracts-only / doc-heavy PRs they are often where the only finding lives.
+- Each touched migration / schema file in full (`*.sql`, `prisma/schema.prisma`, `*_pb.proto`, `models.py`, etc.).
+- **The `cue` column of `reference/claude-failure-modes.md`** (full table, single-line cues only) — primes the sideways search at step 7.
+- **The class-triggered lookup table at the top of `reference/bug-patterns.md`** — note which classes the diff will touch; full sections are read at step 6.
 
-- **Completeness audit** — independently re-derive semantic surfaces from the diff and flag what the model missed. (`subagent_type: general-purpose`)
-- **Sibling discovery** — list candidate sibling paths; no findings. (`subagent_type: Explore`)
-- **Search partitioning** — large reviews; each subagent owns disjoint surfaces and returns classified hits. (`subagent_type: general-purpose`)
-- **Adversarial verification** — try to disprove a Critical, High, or subtle cross-file Medium candidate. (`subagent_type: general-purpose`)
+**ADR/spec drift sweep.** Extract concept terms from touched files (top-level directory names, basenames-without-extension, exported identifiers visible in hunk headers). Run one `rg -l '<term1>|<term2>|...'` across `docs/adr/`, `docs/specs/`, and any `adr/` or root `ADR-*.md`. Read every match in full. Untouched ADRs whose normative claims appear contradicted by the change are candidates for the doc-vs-impl-lies class — record them on candidate lines in step 8.
 
-**Never use subagents for:** stating claims, picking severity, writing the rendered review, or any final-synthesis work.
+**Adjacent comments are claims.** For every touched code path, re-read the comments and docstrings immediately surrounding the change as if they were doc-bullets. A comment that overstates or contradicts the new code is a `claim-vs-reality` candidate.
 
-**Completeness audit trigger (specific):** run the completeness-audit subagent when
+### 3. Enumerate surfaces
 
-- `target=pr` AND `changed_files > 3`, OR
-- `semantic_surfaces > 5`, OR
-- the diff crosses a contract boundary, OR
-- the main reviewer is unsure whether the surface inventory is complete.
+Open `notes.md` and write the **`## Surfaces`** section: every changed semantic surface — fields, types, enum variants, statuses, routes, endpoints, query/cache keys, event/job/queue names, feature flag keys, config keys, permission names, database columns, serialization names, exported helpers/hooks/components, public types, public functions, env vars, error codes, log keys, metric names. **Deletions count.**
 
-For `target=pr` with `changed_files <= 3` and no contract boundary, either run the audit or record `skipped=true reason=tiny-local-pr-no-contract-boundary` in `search.md`.
+For each surface, refine `grep_terms` so the list includes the actual identifiers AND every serialized alias (camelCase ↔ snake_case ↔ kebab-case, route slugs, DB column variants, old form after rename). A broad `grep_terms` recreates v1's process tax at step 7; a narrow one misses sibling producers.
 
-## Initialize
+`## Surfaces` is mandatory. Refer to *Notes file* for the exact line shape.
 
-```bash
-TS=$(date -u +%Y%m%dT%H%M%SZ)
-DIR="tmp/custom-review-$TS"
-mkdir -p "$DIR"
-```
+### 4. Completeness audit (early gate)
 
-Use TodoWrite to create one todo per phase below. Mark `in_progress` when you start, `completed` only when the phase's artifact passes its gate. Do not batch completions.
+Per the *Subagents* section: spawn a completeness-audit subagent (`subagent_type: general-purpose`) when the diff `changed_files > 5 OR semantic_surfaces > 5 OR any contract boundary touched`. Inputs: `scope` summary, `diff.patch`, the `## Surfaces` block. Instruction: *"independently re-derive the semantic surfaces this diff touches; report only what is missing from the surfaces list or what looks misclassified; do not propose findings; do not edit any file."*
 
-## Artifact format
+Add returned missing surfaces to `## Surfaces` before step 5. **Mandatory return loop:** if a surface was added, the new surface must be falsified at step 6 and its hits classified at step 7.
 
-All artifacts use **structured bullets** with stable IDs, required fields keyed `field=value`, and a lifecycle status where applicable. Tables fail on code-context reasoning; freeform prose fails on accountability. Structured bullets are the right middle.
+For docs-only or tests-only diffs that touch no normative behavior, skip with one-line reason on the subagent line.
 
-Read `reference/artifact-schema.md` once before starting for the per-phase templates and ID prefixes.
+### 5. State claims
 
-The seven artifacts under `$DIR/`:
-
-| Artifact | Owns | Phase that writes it |
-|---|---|---|
-| `scope.md` | What is being reviewed | Scope |
-| `model.md` | Sources of truth, falsifiable claims, semantic surfaces | Model |
-| `search.md` | Per-claim traces, classified hits, completeness audit, sibling-path inspection | Search |
-| `falsification.md` | Per-claim falsification attempts; backward-compat / parity / async / deletion sub-checks | Falsification |
-| `tests.md` | Test audit — fixture blindness, assertion correctness, coverage gaps | Tests |
-| `verification.md` | Verified findings (structured); dropped candidates with reason | Verification |
-| `review.md` | Rendered review printed to chat | Review |
-
----
-
-## Scope phase
-
-Goal: capture exactly what's being reviewed so later phases can't drift.
-
-1. Resolve target type per the table above.
-2. Determine the diff command for the target:
-   - `branch`: `git diff <base>...HEAD` (three-dot — merge-base diff)
-   - `pr`: `git diff <base_ref>...<head_ref>` (three-dot, merge-base). Resolve both refs via `gh pr view <num> --json headRefName,baseRefName,headRefOid,baseRefOid`. If `<head_ref>` is not present locally, fetch it read-only first: `git fetch origin pull/<num>/head:refs/custom-review/pr-<num>` and use `refs/custom-review/pr-<num>` as `<head_ref>`. File reads at the PR state use `git show <head_ref>:<path>`. Do not switch branches; the operator's working tree is not touched.
-   - `commit`: `git diff <sha>^..<sha>` (two-dot, the changes in that commit). Operator may explicitly supply ranges like `<sha>^1..<sha>` for merge-commit first-parent diffs.
-   - `uncommitted`: `git diff HEAD` (working tree vs HEAD)
-   - `paths`: no diff — capture the full content of every listed path
-   - `snippet`: no diff — record the pasted code
-3. For diff-based targets: capture full diff output to `$DIR/diff.patch`; also capture `... --stat` for the file-count.
-4. For `paths` / `snippet` targets: capture file contents (or pasted code) to `$DIR/inputs/`.
-5. Note dirty-worktree state (`git status --porcelain`) and untracked-file count for git-based targets. For `pr` targets, also record `head_ref`, `base_ref`, `head_oid`, `base_oid` (from `gh pr view`) in `scope.md` so later phases read files via `git show <head_ref>:<path>` rather than via the working tree.
-6. Capture operator focus text verbatim.
-
-**Write `$DIR/scope.md`** per `artifact-schema.md`.
-
-**Gate:** every field in the schema is filled or carries an explicit `N/A reason=...`. No forbidden marker values.
-
----
-
-## Model phase
-
-Goal: before reading a line of changed code, know what the change is supposed to mean (claims), what backs that meaning (sources of truth), and what surfaces it touches (semantic surfaces).
-
-### Sources of truth
-
-**Mandatory reads (skip only if file absent; record absence in `model.md`):**
-
-- Repo-root `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`.
-- `CONTRIBUTING.md` if present.
-- Any `ADR-*.md` / `adr/`, `docs/adr/`, `docs/decisions/`, `docs/rfcs/`, `docs/specs/` files **touched by the diff or referenced from the diff**.
-- For `pr` target: PR description (`gh pr view <num> --json title,body`) and any in-repo or external doc URLs in the body.
-- Each touched migration / schema file in full (`*.sql`, `prisma/schema.prisma`, `models.py`, `*_pb.proto`, etc.).
-
-**ADR/spec drift sweep (mandatory).** The touched/referenced filter misses untouched ADRs that the code change silently violates — exactly the kind of finding the skill advertises.
-
-1. From `scope.md`, extract concept terms: top-level directory names of touched files (e.g. `src/auth/...` → `auth`), basenames-without-extension of touched files, identifiers visible in diff hunk headers or in added/removed lines as exported symbols.
-2. List the standard ADR/spec locations present in the repo (typically `docs/adr/`, `docs/decisions/`, `docs/rfcs/`, `docs/specs/`, plus any `adr/` or `ADR-*.md` in the root). Skip if none exist.
-3. Run a single ripgrep across all candidate locations: `rg -l '<term1>|<term2>|...' docs/adr/ docs/specs/ ...`. Read every match in full.
-4. Record each match in `model.md` (sources section) with `touched=no` and `relevance=<high|medium|low>` based on whether the doc makes a normative claim about a concept the diff touches. Note `potential_drift=<ADR-id>` on any source whose normative claim appears to be contradicted by the change.
-
-**Source-of-truth conflicts.** When two sources disagree (an ADR says X, tests assert not-X, the PR description says Z), do not silently pick one. Record the conflict as a source-of-truth record with `kind=conflict` and name which authority you treat as governing (or `unresolved` — an unresolved conflict is itself a candidate finding for the Falsification phase).
-
-### Claims
-
-For each meaningful change in the diff, state a **falsifiable claim**:
+Write `## Claims` in `notes.md`. For each meaningful change in the diff, one falsifiable statement:
 
 > The code now promises X. X is false if Y.
 
-Refactors are claims too (a refactor-claim is *"no behavioral change"* — often the most violated). Deletions are claims too (a deletion-claim is *"the removed thing is unused"* — check docs, metrics, configs, flags, tests).
+Refactor-claims (*"no behavioral change"* — often the most violated) and deletion-claims (*"the removed thing is unused"*) count. **No claim cap.** If you end up with more than 8 claims, group by root-cause concept — but the group's falsifications at step 6 must still cover each member's distinct surface. Grouping is organizational, not skipping.
 
-### Surfaces
+Each claim block carries:
+- `tier:` — the rubric tier (`observable-wrong-behavior` / `silent-state-divergence` / `contract-violation-not-yet-visible` / `procedural-doc-drift` / `comment-precision` / `N/A`). The tier anchors severity at step 9; refactor-parity claims start at `N/A` but must be escalated to a real tier the moment parity breaks.
+- `surfaces:` — the `Sn` IDs from step 3 the claim covers.
+- A `producer-realization:` line for any claim about a new producer (writer / dispatch arm / editor / setter / event emitter / status field / persisted record / config key / exported helper that affects current behavior). The fields:
+  ```
+  producer-realization: producer=<file:line>; produced=<value>; intended-consumer=<concept>; actual-read-site=<TBD-until-step-7|file:line>; source-of-truth-at-read=<TBD-until-step-7|concrete>; observable-effect=<one-line>
+  ```
+  Start the row with `actual-read-site` and `source-of-truth-at-read` deferred to step 7; finalize after sideways search. A finalized row that reveals the consumer reads `Default::default()`, `unwrap_or_default`, an unrelated config, a stale cache, or a dead branch — or no consumer at all — is the producer-dead class (R10 P1, R6 assemble, R7 TUI rollback). Promote a candidate immediately.
 
-Enumerate every changed semantic surface: fields, types, enum variants, statuses, routes, endpoints, query/cache keys, event/job/queue names, feature flag keys, config keys, permission names, database columns, serialization names, exported helpers/hooks/components, public types, public functions, environment variables, error codes, log keys, metric names. **Deletions count.**
+**Concrete planned realization (dormant producer with named activation surface).** If a `producer-realization:` line finalizes to no current `actual-read-site`, but the PR text or diff structure shows this arm is the canonical implementation for a named upcoming surface, promote correctness defects in the arm to findings (severity per activation impact), not Residual Risk. The "concrete impact at file:line" gate reads as *"impact lands when the planned consumer ships,"* not *"impact lands today."* This rule overrides the no-consumer dead-state default only for concrete planned realization; without the evidence below, dormant arms stay dead-state / Residual Risk per the existing default.
 
-For each surface, identify the **search strings** (`grep_terms`) Phase Search will use. `grep_terms` is the authoritative search list — descriptive `old_form` / `new_form` labels are not used as literal searches. For added surfaces, `old_form=N/A`; for removed, `new_form=N/A`; `grep_terms` always carries the actual identifiers.
+Evidence of concrete planned realization, any one of:
+- The PR description or commit message names a stacked next PR.
+- The diff adds carrier fields (struct fields, enum variants, command arms) whose names or placement tie them to a named upcoming surface, even though no operator-facing consumer exists yet.
+- Working-plan tests, named test files, or `TODO(next-pr)` comments pinpoint the activating surface.
+- Staged call sites: the diff contains the code that will be wired in the next PR, marked with `#[allow(dead_code)]`, `pub(crate)` exports with no internal callers, or sibling helpers staged alongside the producer.
 
-**Write `$DIR/model.md`** per `artifact-schema.md` — one section each for sources, claims, surfaces. Cross-link surfaces to claims via `claim_refs=C1,C3`.
+Without any of these, correctness defects inside a dormant arm stay Residual Risk / dead-state unless there is a separate current false claim about the arm. The trigger is concrete planned realization, not "every defensive branch."
 
-**Gate:** every meaningful change in the diff appears in at least one claim. Every claim has a `falsified_if`. Every surface has either `grep_terms=<list>` or `grep_terms=none` with a written closure plan. No forbidden marker values.
+### 6. Falsifications & sub-checks (≥3 + four sub-checks per claim)
 
----
+For each claim in `## Claims`, write **≥3 falsification lines** plus four sub-check lines. Each falsification has a result tag (`disproved` / `reachable-defect` / `open-question`) with a one-line reason. Each sub-check is one of `finding | checked-no-issue | N/A reason=...`:
 
-## Search phase
+- `backward_compat` — old data in DB, old clients calling API, old configs/feature flags, old enum values in persisted state, old URLs in shared links, cached state, persisted UI state.
+- `failure_parity` — error / loading / empty / cancel / retry / timeout / permission-denied / partial-success paths.
+- `async_invalidation` — every event that should cancel in-flight work, not just replacement requests.
+- `deletion_orphans` — for deletion-claims, what still references the removed thing (docs, metrics, configs, flags, monitoring, tests, generated code).
 
-Goal: for every claim, trace it end-to-end. For every surface, find every occurrence and assign it a role. Make sure the model didn't miss surfaces. Find sibling paths the model should also worry about.
+Before writing falsifications, **read the bug-patterns sections triggered by this diff's classes** (typically 2–4 of the 19) from `reference/bug-patterns.md`. Prime attention; do not tick mechanically.
 
-### Trace each claim
+`inconclusive` may appear transiently but must resolve to `disproved` / `reachable-defect` / `open-question` before step 8.
 
-Producer → storage/transport → consumer → user-visible effect (operator-visible effect for backend/infra). One trace block per claim. `gaps` is allowed but must name the segment, not be silent. For UI claims, replace `transport` with `state` and `effect` with `render`.
+For trailing focus text, add ≥1 extra falsification per claim that targets the focus area. Focus directives do not narrow scope.
 
-### Search & classify every hit
+### 7. Search sideways & classify every hit at high-risk roles
 
-For each surface in `model.md`:
+For every surface in `## Surfaces`, search using the surface's `grep_terms`. Classify every non-generated hit into a role:
 
-1. Search using **`grep_terms`** from the surface record. Do not search `old_form`/`new_form` as literal strings — they are labels. Include serialization variants (camelCase ↔ snake_case, route slugs, db column variants) in the search.
-2. Classify every non-generated hit into a role: `producer`, `consumer`, `transformer`, `serializer`, `storage`, `migration`, `validation`, `permission`, `cache`, `ui-render`, `test`, `doc`, `generated`, `irrelevant`.
-3. **Fully read every hit in high-risk roles:** producer, transformer, serializer, storage, migration, validation, permission, cache, and any role touching async state or a public API boundary.
-4. For mechanically similar hits, batch with `kind=batch count=N pattern=<...> role=<...> rationale=<why batching is safe>`. Do not silently sample.
+`producer | consumer | transformer | serializer | storage | migration | validation | permission | cache | ui-render | test | doc | generated | irrelevant`
 
-The search closure rule: *"every occurrence is accounted for, but not every occurrence is deeply read."* Every hit has a role and a status. No `unclassified`, no silent skips.
+**Fully read every hit in producer / transformer / serializer / storage / migration / validation / permission / cache roles** — these are the falsifying-evidence roles. For mechanically similar hits, batch with `count=N pattern=<...> rationale=<one-line>` and read one representative; do not silently sample.
 
-### Completeness audit
+Use the results to:
+- Finalize any deferred `producer-realization:` lines in `## Claims`.
+- Update the falsifications in step 6 (return loop): a hit at a high-risk role that contradicts a `disproved` result re-opens that line.
+- Surface sibling workflows the model missed: create/edit, single/bulk, admin/user, mobile/desktop, success/error/loading/empty, initial/retry/cancel, deletion-mirror.
 
-Spawn the completeness-audit subagent per the trigger conditions in the Subagent policy section above. The subagent's inputs and prompt vary by target type:
+Stop expanding when remaining paths no longer cross a changed contract boundary.
 
-- **Diff-based targets (`pr`, `branch`, `commit`, `uncommitted`):** subagent receives `$DIR/scope.md`, `$DIR/diff.patch`, and the current `model.md`. Instruction: *"independently derive every semantic surface the diff touches; report only what is missing from `model.md` or what looks misclassified; output structured bullets in the same format; do not propose findings; do not edit any file."*
-- **`paths` target:** subagent receives `$DIR/scope.md`, `$DIR/inputs/` (the captured file contents), and the current `model.md`. Instruction: *"independently derive the public semantic surfaces (exports, configs, schemas, etc.) of these files; report what is missing from `model.md` or misclassified; do not propose findings; do not edit any file."*
-- **`snippet` target:** **skip the completeness audit.** A snippet has no surrounding repo context — re-deriving "every surface the change touches" is not meaningful. Record `[A0] skipped=true reason=snippet-target-no-repo-context` in `search.md` and add a coverage caveat: *"Completeness audit skipped — snippet target lacks repo context to independently re-derive surfaces."*
+**`cargo doc` regression check (cross-module item-move trigger).** When the diff relocates `pub` or `pub(crate)` items with `///` docstrings across module / file boundaries (god-file split, hub-module reorganization, refactor that introduces newly-created modules), run `cargo doc` against the worktree and diff the warning count vs. master. The class is rustdoc intra-doc links that previously resolved within one module but now resolve across a private boundary — invisible to byte-identity diffs, clippy, and most CI gates.
 
-For each audit entry: record the subagent's output, then write a main-thread disposition (`added-to-surfaces`, `rejected reason=...`, or `confirmed-complete`).
+New `rustdoc::private_intra_doc_links` / `rustdoc::broken_intra_doc_links` / unresolved-link warnings ARE findings:
+- **Low** if the broken doc link is on an internal (`pub(crate)` or private) item only maintainers see.
+- **Medium** if the broken doc link is on a `pub` item — the published API surface now ships a misleading docstring.
 
-**Return loop (mandatory):** if `disposition=added-to-surfaces`, then before this phase completes:
+Pre-existing warnings unchanged in count are out of scope. Compare counts (and categories), not absolute presence.
 
-1. Append the new surface to `model.md`.
-2. **Return to the Model phase** for the new surface: state the implied claim (a surface without a claim is just a noun), append it to `model.md`, and re-run the ADR/spec drift sweep narrowly for the new surface's concept terms.
-3. **Return to the trace step** above for the new claim.
-4. Re-run the search-and-classify step for the new surface.
+**Trigger:** any refactor whose diff moves `pub` / `pub(crate)` items with `///` docstrings between modules or files. PR #183 demonstrated this is the only lens that catches the class — 7 consecutive clean refactor PRs (#177–#184) and the only true positive came from this check.
 
-Skipping these steps means the new surface never gets falsified in the next phase — that's not optional.
+### 8. Read tests as artifacts + build the candidate ledger
 
-### Sibling-path inspection
+For every test file touched by the diff AND every test file discovered while tracing claims at steps 6–7:
 
-Spawn the sibling-discovery subagent (always run when the subagent policy permits — it's cheap; output is candidates not conclusions). Subagent receives `$DIR/model.md` and `$DIR/scope.md`, with the instruction *"for each changed file or claim, list candidate sibling implementations — the other side of a workflow (create/edit, single/bulk, admin/user, mobile/desktop, success/error/loading/empty, initial/retry/cancel, deletion-mirror), or alternate implementations of the same concept. Output paths with one-sentence rationale. Do NOT decide whether each sibling is broken."*
+- **Fixture blindness:** what does the fixture make impossible to fail? Two sub-cases:
+  - **Value-masking:** a fixture that pre-assigns inputs which are globally distinct, globally valid, or always-unique can hide a producer's real-world collision/failure mode. For every producer with a falsifiable claim at step 6, ask *"does the fixture feed it values that can never collide / never be malformed / never overlap the way production values do?"* (PR #194 F4: `seed_ws_messages` used globally-unique seq, masking the per-direction-seq collision).
+  - **Producer-bypass:** does any test actually drive the real producer function, or do all fixtures construct the intermediate/output struct directly and never call it? A test that builds the result type by hand and asserts on it exercises nothing the producer does — the producer can ship broken and stay green. For every producer with a step-6 claim, confirm at least one test calls it (PR #203: gutter tests built `FindingGutterIndex` directly and never drove `finding_gutter_index()`, so the status-fold bug shipped green).
+- **Assertion correctness:** does the assertion encode the regression?
+- **Coverage gaps:** which `reachable-defect` lines from step 6 does this test not cover?
 
-For each claim, record axes inspected: `create_vs_edit`, `single_vs_bulk`, `admin_vs_user`, `mobile_vs_desktop`, `success_vs_error`, `success_vs_loading`, `success_vs_empty`, `initial_vs_retry`, `initial_vs_cancel`, `deletion_mirror`. Each axis has a status (`inspected-both`, `only-<side>`, `N/A reason=...`). `N/A` without reason is forbidden.
+A test that *"passes when the bug is present"* (value-masking, producer-bypass, wrong-assertion, missing-visible-outcome assertion) is itself a candidate — its severity scales to the underlying defect.
 
-Before processing sibling output, read `reference/bug-patterns.md` sections **3, 5, 6, 10** (sibling and parity heuristics).
+Now write `## Candidates` in `notes.md`. Every `reachable-defect`, `open-question`, sub-check `finding`, finalized-and-dead producer-realization line, ADR-drift hit, test-derived defect, and dead/defensive-state observation gets a `Kn` line. Each line ends with a status:
+- `verified-finding-Fn` (after step 9 promotion)
+- `open-question-OQn`
+- `dropped reason=<one-line>` (guard-found at file:line / disproved-by-adversarial-verification / no-render-path-proof / claim-true / not-yet — every drop has a substantive reason)
 
-**Write `$DIR/search.md`** per `artifact-schema.md` — sections for traces, hits, completeness audit, siblings.
+The candidate ledger is what defeats trigger-shyness. A candidate that is never written cannot be dropped with a reason; the only way to drop is to write it down first.
 
-**Gate:** every claim has a trace block. Every hit has a role and status. Every surface either has hits or carries a closure plan. Every claim has a sibling block with every axis status. Audit dispositions are complete. Return loops fully executed. No forbidden marker values.
+### 9. Promote candidates to findings
 
----
+For each `reachable-defect` candidate:
 
-## Falsification phase
+1. Re-open the primary cited file at the cited line with 30–80 lines of context.
+2. Re-open every supporting file the candidate depends on: producer, consumer, sibling, test, source-of-truth doc.
+3. Apply the **finding-promotion rules** below. Confirm the promotion is consistent with the claim's `tier:` (or declare a tier escalation on the `Kn` line with a one-line reason).
+4. If the re-read reveals a guard:
+   - Guard fully prevents the failure → drop the `Kn` line with reason `guard-found at <file:line>`.
+   - Guard narrows the condition → rewrite the candidate; return to step 6 to re-check the claim's sub-checks; the tier may shift.
+   - Guard makes the path less common but still reachable → keep at lower severity within the tier's floor/ceiling.
 
-Goal: for every claim, generate ≥3 concrete falsification attempts and read the code that proves or disproves each. Apply specific sub-checks for failure-state parity, backward compatibility, async invalidation, and deletion orphans.
+The candidate's `Kn` line moves to `status=verified-finding-Fn` for promoted, `status=open-question-OQn` for high-risk uncertainty, or `status=dropped reason=<...>` otherwise.
 
-Before starting, read `reference/bug-patterns.md` sections **4, 7, 8, 11, 13, 14, 15** (edge enumeration heuristics) and `reference/claude-failure-modes.md` in full.
+### 10. Adversarial verification (post-promotion gate)
 
-`falsification.md` is the **unified candidate-findings store**. Candidates can originate from three places:
-
-1. **Falsifications** — the per-claim falsification attempts below (this is the bulk).
-2. **Source-of-truth conflicts** — any `model.md` source record with `kind=conflict` and `summary=unresolved` (or where a `potential_drift=<ADR-id>` was recorded) becomes a candidate here. Create an Fa record with `kind=source-conflict`; the "claim being falsified" is the resolution implied by the chosen authority.
-3. **Test-derived defects** — written into `falsification.md` by the later Tests phase via the explicit step in that phase. Create with `kind=test-derived`.
-
-Every candidate that could become a finding lives in `falsification.md` with an `Fa` ID. The Verification phase iterates over the complete set — anything not in `falsification.md` cannot become a finding.
-
-**Per claim, ≥3 falsifications** covering:
-
-- **Generic:** what input, state, or sequence makes the promise false?
-- **Failure-state parity:** does this work on error / loading / empty / cancel / retry / timeout / permission-denied / partial-success paths? Untested paths are usually wrong.
-- **Backward compatibility:** old data still in the database, old clients calling the API, old configs/feature flags, old enum values in persisted state, old URLs in shared links, cached state from before the change, persisted UI state (filters, selections, scroll positions).
-- **Async invalidation:** for every async operation introduced or changed, what cancels in-flight work when state changes? Not just replacement requests — clearing, navigation, blur, filter change, identity switch.
-- **Deletion orphans:** for every deletion-claim, what still references the removed thing — docs, metrics, configs, flags, monitoring, tests, generated code?
-
-**If trailing focus text was given,** add ≥3 additional falsification attempts specifically targeting the focus area. The focus directive does not narrow scope — broad falsifications still run.
-
-Each falsification has a `result`: `disproved`, `reachable-defect`, or `inconclusive`. `inconclusive` is permitted transiently but must resolve to `reachable-defect` or `disproved` before the Verification phase ends.
-
-**Write `$DIR/falsification.md`** per `artifact-schema.md` — one block per claim with falsifications and the four sub-checks (`backward_compat`, `failure_parity`, `async_invalidation`, `deletion_orphans`).
-
-**Gate:** every claim has ≥3 falsifications OR an explicit written reason for fewer (`reason=claim has only one observable behavior`). The four sub-checks are each addressed (findings, "checked: no issue", or `N/A reason=...`). No silent skips. No forbidden marker values.
-
----
-
-## Tests phase
-
-Goal: read touched tests as artifacts to audit, not as proof. Ask what the fixture makes impossible.
-
-For every test file touched by the diff or covering surfaces in `model.md`:
-
-- **Fixture blindness:** what does the fixture make impossible to fail? (perfect data, mocked services, single-user assumption, no concurrency, no old data, same fake ID reused across distinct semantic types, etc.)
-- **Assertion audit:** does the assertion encode the regression? Does it assert the wrong thing?
-- **Coverage gaps:** which `reachable-defect` candidates from `falsification.md` does this test not cover?
-- **New tests added:** `yes` / `no` / `missing-but-recommended`.
-
-Coverage gaps that cover a `reachable-defect` from `falsification.md` are themselves candidate findings (severity scaled to the underlying defect). **Append them as Fa records to `falsification.md`** with `kind=test-derived`, citing the test file:line and the underlying `Fa` ID. This keeps the unified candidate-store invariant: every candidate that could become a finding lives in `falsification.md` and is iterated by the Verification phase.
-
-If the Tests phase reveals a fixture-blindness defect that is **not** already represented by a falsification (e.g. an existing test "passes" but the fixture makes the real failure impossible to surface), also append a `kind=test-derived` Fa record with the underlying defect described.
-
-**Write `$DIR/tests.md`** per `artifact-schema.md`. Append `kind=test-derived` records to `$DIR/falsification.md` for any test-revealed candidates.
-
-**Gate:** every touched test file has a block. Coverage gaps are linked back to specific `falsification.md` IDs (existing or newly appended). No forbidden marker values.
-
----
-
-## Verification phase
-
-Goal: turn `reachable-defect` candidates into verified findings; drop the rest. The verification gate is the hard invariant — only verified findings reach the Review phase.
-
-### Main-thread literal re-read
-
-For every candidate with `result=reachable-defect`:
-
-1. Re-open the primary cited file at the cited line with 30–80 lines of context (more if the change touches a long async block or multi-step handler).
-2. Re-open every supporting file the candidate depends on: producer, consumer, sibling, test, source-of-truth doc — whichever links the claim relies on.
-3. Ask: **can I state, in one sentence each, the condition, the actual wrong behavior, and the concrete impact, with every link in the chain confirmed by the code I just read?**
-
-If the re-read reveals a guard you missed:
-
-- Guard fully prevents the failure → drop with reason.
-- Guard narrows the condition → rewrite the candidate with the narrower condition. **Return loop:** re-check the falsification block for whether the narrowed condition changes severity, related sites, or test gaps. Update accordingly.
-- Guard makes the path less common but still reachable → keep, possibly lower severity.
-
-Do not preserve a candidate's framing once contradictory context appears. Attached reviewers become untrustworthy.
-
-### Adversarial verification (subagent)
-
-Run on **every** Critical and High candidate, and on every Medium candidate that is cross-file or race-condition. Skip for purely local Low/Medium candidates.
-
-Spawn a subagent (`subagent_type: general-purpose`) with **only**:
-
-- The candidate's bullet from `falsification.md` (after the re-read updates).
-- The cited file:line for each link in the chain.
-- Instruction: *"You are an adversarial verifier. Read only the cited locations and their surroundings. Try to disprove this finding. Return one of: `holds <reason>`, `disproved <reason and citation>`, `narrows <revised condition>`, `unsupported <what evidence is missing>`. Do not extend the search; do not propose new findings."*
-
-(`Explore` is wrong for this — adversarial verification is bounded code reasoning, not file-location.)
+Per the *Subagents* section: spawn an adversarial verifier (`subagent_type: general-purpose`) for **every Critical/High finding, every cross-file Medium where the proof depends on multiple real layers or non-test files, and every visibility-dependent finding**. Input: the finding text + every cited file:line. Instruction: *"try to disprove this finding. Read only the cited locations and their surroundings. Return one of: `holds <reason>` / `disproved <reason and citation>` / `narrows <revised condition>` / `unsupported <missing evidence>`. Do not extend the search; do not propose new findings."*
 
 Verdict handling:
-
 - `holds` → keep finding.
-- `disproved` → drop with verifier's reason.
-- `narrows` → rewrite finding with narrower condition; re-run the "guard found" decision tree above and the return-loop to the falsification block.
-- `unsupported` → return to the re-read step with the verifier's suggestion; if you still cannot supply the missing evidence, drop the finding.
+- `disproved` → drop the `Kn` line with `reason=disproved-by-adversarial-verification` + verifier's citation.
+- `narrows` → rewrite finding; return to step 6 to re-check the claim's sub-checks.
+- `unsupported` → return to step 9's re-read with the verifier's gap; if not closed, drop.
 
-### Promote and drop
+Skip for purely local Low findings — the operator's own re-read at step 9 is the check at that scale.
 
-Surviving candidates become verified findings (each with severity, headline, primary site, condition, behavior, mechanism, impact, fix direction, optional related sites, root-cause-group label, verifier verdict). Dropped candidates are recorded with one-line reasons (`guard-found`, `disproved-by-verifier`, `unsupported`, `superseded-by-finding-Fn`).
+### 11. Failure-mode preflight & write outputs
 
-**Write `$DIR/verification.md`** per `artifact-schema.md` — two sections: `## Verified findings` (`[F1]` records) and `## Dropped candidates` (`[D1]` records).
+Silently answer the 12-question preflight (one line each, internal; not printed to chat). Any "no" returns to the named step and re-runs everything downstream:
 
-**Gate before Review phase:** every candidate from `falsification.md` is in `verification.md` as either verified or dropped. No `inconclusive` remains. Every verified finding has all fields. Every Critical/High has `verifier_verdict` of `holds` or `narrows`. No forbidden marker values.
+1. (step 2) Did I read CLAUDE.md / AGENTS.md / ADRs, run the ADR drift sweep, and prime patterns?
+2. (step 7) Did I extend past changed lines into producers, consumers, and downstream effects?
+3. (step 8) Did I read touched tests as artifacts — fixture blindness, assertion correctness, coverage gaps — rather than as proof?
+4. (step 6) Did I treat refactor-claims as falsifiable and look for behavioral drift?
+5. (step 7) Did I enumerate sibling axes for every claim that has them?
+6. (step 6) Did I check error / loading / empty / cancel / retry / timeout / permission-denied / partial-success paths?
+7. (step 7) Did I search producers AND consumers of every changed surface and classify every hit?
+8. (step 9 / step 10) Did I drop every unverified suspicion instead of hedging it into a finding?
+9. (step 6) Did I check async invalidation — every event that should cancel in-flight work?
+10. (step 6 / step 7) Did I separate UI gating from server-side authorization for every permission-touching change?
+11. (step 6) Did I check backward compatibility against old data / old clients / old configs / old enums / cached state / persisted UI state?
+12. (step 8) For every producer with a step-6 claim, did I verify a test actually drives the producer fn (not just constructs its output struct) AND that the fixture exercises its real failure modes rather than pre-assigning values (globally-unique IDs, always-valid inputs, non-colliding counters) that mask them?
 
----
+Record exactly `preflight: passed` in `## Preflight` once all questions are "yes" and downstream rework is complete. Do not render `review.md` while a `returned-to=<step>` state is open; `returned-to` is transient.
 
-## Review phase
+Render `review.md` per *Output structure* below and `reference/output-format.md`. Findings first, ordered by severity then root-cause group; Open Questions; Coverage footer.
 
-Goal: emit a single rendered review that reads as one reviewer's output and is verified at every cited line.
+## Risk-aware small mode
 
-Read `reference/output-format.md` and `reference/claude-failure-modes.md` before drafting.
+For diffs where ALL of the following are true:
 
-### Hard invariant
+- `changed_files ≤ 5`
+- `≤ 300 changed lines`
+- no contract-boundary touch from this list: auth / permissions / authorization gates, persistence (DB schema, migration, on-disk format), wire format (serialization, public API, RPC, RPC error codes), cross-process or cross-machine state, async cancellation / request invalidation, public type / exported function / hook signature, config keys / env vars / CLI flags, feature flags, query/cache keys, persistent UI state, background jobs / events / queues, identity / tenant / org boundaries, payment / account / core workflow paths, old-data / rollout compatibility, ADR / spec / runtime-model.md
+- no producer-claim with a non-trivial consumer
 
-**A finding appears in `review.md` if and only if it appears in `verification.md` with `verifier_verdict=holds` or `verifier_verdict=narrows` (or `verifier_verdict=skipped-local` for purely local Low/Medium).** Everything else is dropped, an open question, residual risk, or a test gap.
+… reduce step 4 and step 10 subagents to skipped (one-line reason on the subagent line) and relax step 6 to ≥1 falsification per claim with two sub-checks (`failure_parity` + `backward_compat`) per claim. `notes.md` and the step 11 preflight remain mandatory.
 
-### Failure-mode preflight (internal, before printing)
+**Escape hatch (mandatory).** If during the review any candidate is assessed Critical / High / cross-file Medium / visibility-dependent, escalate to normal mode immediately: adversarial verification applies, the full four sub-checks for that claim become mandatory.
 
-Answer these eleven yes/no questions silently. **Any "no" returns the review to the named phase.**
+## Notes file
 
-1. (Model) Did I read CLAUDE.md / AGENTS.md / ADRs, run the ADR drift sweep, and record source-of-truth conflicts?
-2. (Search) Did I extend past changed lines into producers, consumers, and downstream effects?
-3. (Tests) Did I read touched tests as artifacts — fixture blindness, assertion correctness, coverage gaps — rather than as proof?
-4. (Falsification) Did I treat refactor-claims as falsifiable and look for behavioral drift (query enablement, side effects, error rendering, memoization) rather than "compiles + tests pass"?
-5. (Search) Did I enumerate sibling axes (create/edit, single/bulk, admin/user, mobile/desktop, success/error/loading/empty, initial/retry/cancel, deletion-mirror) for every claim?
-6. (Falsification) Did I check error / loading / empty / cancel / retry / timeout / permission-denied / partial-success paths, not only happy paths?
-7. (Search) Did I search both producers AND consumers of every changed surface, with classification of every hit?
-8. (Verification) Did I drop every unverified suspicion instead of hedging it into findings?
-9. (Falsification) Did I check async invalidation — every event that should cancel in-flight work, not just replacement requests?
-10. (Search + Falsification) Did I separate UI gating from server-side authorization for every permission-touching change?
-11. (Falsification) Did I check backward compatibility against old data / old clients / old configs / old enums / cached state / persisted UI state?
+`tmp/custom-review-<ts>/notes.md` is **mandatory**, not optional. Its structure carries the enforcement that v1 spread across seven files. See `reference/notes-file.md` for the template; the mandatory sections are: `## Surfaces`, `## Claims`, `## Candidates`, `## Coverage`, `## Preflight`.
 
-### Output structure
+The meta-fixer / operator adjudicates only `review.md`. `notes.md` is reviewer-internal — used by the reviewer to enforce the workflow on itself; not credit-bearing for benchmarking.
 
-Printed to chat AND written to `$DIR/review.md`:
+## Finding-promotion rules
+
+A candidate becomes a finding **only when its text carries the proof.** No upstream artifact substitutes for proof in the finding itself.
+
+### General
+
+Every finding must include:
+
+- **Primary site** as `path:LINE`.
+- **Condition** — the input, state, or timing under which the failure occurs.
+- **Behavior** — what the code actually does (declarative, present tense).
+- **Mechanism** — *why* it does that, naming the specific construct (missing guard, wrong predicate, race window, dead read site).
+- **Impact** — what the user/data/system/caller observes. Concrete consequence, not *"could lead to issues."*
+- **Fix direction** — one sentence pointing at where and how. Not a rewrite.
+
+If you cannot supply all of these, the candidate cannot be a finding. Drop, move to Open Questions, or compress to a Residual Risk line in coverage.
+
+### Producer-claim findings
+
+A producer-claim finding's text MUST name: the producer (file:line), the produced value, the actual read site (file:line), the actual source of truth at that read site, and the observable effect. Example shape:
+
+> `src/editor.rs:120` writes `agent_permissions` to `config.toml`, but the command path at `src/engine.rs:211` constructs permissions from `AgentPermissionsConfig::default()` instead of reading that file. So `Ctrl+G` saves successfully while the engine continues using defaults.
+
+That sentence contains producer / produced value / actual read site / source of truth / effect, all without a schema. No separate `[Cr]` record needed.
+
+### Visibility-dependent findings
+
+If the finding's impact statement names a user-visible artifact (modal, banner, error message, status line, toast, screen redraw, alt-screen content), the finding MUST carry one of:
+
+- **`Render proof:`** — a one-sentence trace of the render path through any suspend/restore / mount/unmount / modal-queue / alt-screen / focus boundaries, citing file:line for each step.
+- **`Test proof:`** — citation of a real test (`tests/path:line` or in-source `#[test]`) whose assertion would fail if the visible-behavior claim holds. The test must assert the visible outcome, not just the upstream queue/operation state.
+
+If neither proof is available, the candidate is not a finding. The default disposition is **drop** (or surface as a one-line Residual Risk in coverage if it has weak Low-severity merit). Move to Open Questions only when the uncertainty itself is Critical/High — i.e. a real possibility of user-visible breakage where the missing render-path/test evidence is what blocks confirmation. This matches the Open Questions policy in `output-format.md` (the safety valve is for high-risk uncertainty, not for "I noticed but couldn't prove" candidates).
+
+This blocks the R10 F2 class: tracing operation order correctly (mode flip → drain → spawn) but conflating *"operation queued"* with *"user sees outcome"* without proving the render path.
+
+**Prompt-command / keybinding dispatch claims.** For findings whose user-visible impact is *"a keybinding produces wrong or no behaviour"* or *"a prompt-command / menu item / MCP tool / CLI subcommand dispatch fails"*, the `Render proof:` requirement is satisfied by citing the **dispatch chain**: the operator-facing binding → command emitter → engine-command receiver → producing handler, at file:line for each hop. The dispatch chain IS the render-path equivalent for this class — no need to trace through to a TUI redraw.
+
+`Test proof:` may cite a unit test of any hop in the chain.
+
+This is **NOT** a general gate relaxation. It applies only to findings whose impact is *dispatch failure* (binding fires but the command is rejected, no-ops, targets a stale ID / pane / context, or the precondition is never realized). For findings about *what the screen draws after dispatch succeeds* (stale status line, missing modal, wrong list contents, render artefact), the original `Render proof:` requirement still applies.
+
+This addresses the PR #158 round-1 miss class: codex caught four real P2 dispatch bugs (dead `t` binding, dead `j/k` Listener-tab bindings, `scope_selected` never auto-selects, non-Proxy-pane data wipe) that satisfied condition + behaviour + impact at file:line but were rejected because the impact was *"operator presses a key and nothing happens"* rather than a screen-draw claim. The dispatch-chain carve-out admits this class without admitting screen-render hedging.
+
+### Claim-vs-reality findings (doc / comment / dead-state)
+
+For candidates whose defect is *"the codebase claims something false"* (comment overstates what the code does; doc bullet contradicts impl; defensive flag with no observable read; dead dispatch arm; stale section in a runtime-model doc), the verification gate is **NOT** *"is the headline bug reachable through this?"* — it IS *"is the claim currently false?"*
+
+- Claim currently false → finding. Severity floor: Low. Severity ceiling: Medium (per the severity rubric in `output-format.md`). Promote to High only if a documented future consumer is in the same PR and the false claim will mislead them.
+- Claim currently true → drop the candidate.
+- *"The headline bug isn't reachable through this comment"* is NOT a valid drop reason. The codebase still claims something false regardless of whether the original bug is reachable.
+
+The "for whom does it break?" question for these findings is *"maintainers will act on a false model"* — make that explicit in the impact statement.
+
+This is custom-review's strongest demonstrated niche (doc-vs-impl-lies n=4 across R5/R6/R8/R10). It fires only when the gate is applied; trigger-shyness suppresses it.
+
+### Test-derived findings
+
+If a touched test makes a regression impossible to fail (fixture blindness, assertion encodes the bug, no assertion on the visible outcome), promote that as a finding with severity scaled to the underlying defect. Cite the test path:line and one sentence on what the fixture makes impossible.
+
+## Subagents
+
+The main reviewer owns claims, severity, grouping, wording, and whether a finding is real. Subagents gather or challenge evidence; they never produce findings, severity, or final synthesis.
+
+### Completeness-audit (step 4)
+
+`subagent_type: general-purpose`. **Mandatory** when `changed_files > 5 OR semantic_surfaces > 5 OR any contract boundary touched`. Skip with one-line reason for docs-only / tests-only diffs that touch no normative behavior.
+
+Inputs: scope summary, `diff.patch`, the current `## Surfaces` block.
+
+Instruction: *"You are a completeness auditor. Independently re-derive every semantic surface this diff touches (fields, types, enums, statuses, routes, query/cache keys, event/job names, config keys, permissions, columns, serialization names, exported helpers, public types/functions, env vars, error codes, log keys, metric names — deletions count). Report ONLY surfaces missing from the provided list or surfaces that look misclassified. Do not propose findings. Do not assign severity. Do not edit any file."*
+
+Add returned missing surfaces to `## Surfaces`; the new surfaces must be falsified at step 6 and have their hits classified at step 7 (mandatory return loop).
+
+### Adversarial verifier (step 10)
+
+`subagent_type: general-purpose`. **Mandatory** for every Critical/High finding, every cross-file Medium where the proof depends on multiple real layers or non-test files, and every visibility-dependent finding (one with `Render proof:` or `Test proof:` in its shape). Skip for purely local Low findings.
+
+Inputs: the finding text from `review.md` draft + every cited `file:line`.
+
+Instruction: *"You are an adversarial verifier. Read only the cited locations and their surroundings. Try to disprove this finding. Return exactly one of: `holds <reason>` / `disproved <reason and citation>` / `narrows <revised condition>` / `unsupported <missing evidence>`. Do not extend the search; do not propose new findings."*
+
+Verdict handling per workflow step 10.
+
+### Search partitioning (optional)
+
+`subagent_type: general-purpose`. **Optional**, only when the diff exceeds ~15 files AND searches can be cleanly partitioned by disjoint subsystems. Each subagent owns one subsystem and returns classified hits (no findings, no severity). Most reviews do not need this.
+
+### Never
+
+Never use subagents for: stating claims, picking severity, writing the rendered review, or any final-synthesis work.
+
+## Output structure
+
+Print AND write the rendered review to `tmp/custom-review-<ts>/review.md`. The file MUST start with the metadata header below (it is what Hard precondition #4 uses to detect prior runs at the same head):
 
 ```
+<!--
+custom-review-meta
+target: <pr#|sha|branch-name|HEAD|paths|snippet>
+base_ref: <ref or N/A>
+head_ref: <ref or N/A>
+head_oid: <oid or N/A>
+review_started: <ISO-8601 UTC>
+-->
+
 # Custom Review — <target description, one line>
 
 <short two-line summary: target, base, scope, focus directive if any>
 
 ## Findings
 
-<grouped by severity, then root_cause_group; same-cause findings collapsed into one entry with multiple related_sites>
+<grouped by severity, then root-cause group; same-cause findings collapsed into one entry with multiple related_sites>
 
 ### Critical
-<rendered findings>
+<findings>
 
 ### High
 ...
@@ -408,55 +381,43 @@ Printed to chat AND written to `$DIR/review.md`:
 
 ## Open questions
 
-<uncertain high-risk issues that could not be fully verified — bullet list with file:line and what would resolve the uncertainty. The safety valve so "no hedging" does not become false certainty.>
+<uncertain high-risk issues that could not be fully verified — bullet list with file:line and what would resolve the uncertainty>
 
 ## Coverage
 
 - **Files inspected:** <count> (<key paths or directory groups>)
 - **Commands run:** <git diff / rg / tests / typecheck / lint commands and results>
-- **Subagents used:** <which subagents ran and what they returned>
+- **Subagents used:** <if any, with what they returned; omit if none>
 - **Not checked:** <out-of-scope, with reason>
-- **Residual risk:** <what this review didn't close>
+- **Residual risk:** <weak-confidence items that don't deserve a finding but matter>
 - **Test gaps:** <missing coverage that matters>
 ```
 
 ### Per-finding rendering
 
-```
-**[Severity] path/to/file.ext:LINE — short headline**
-
-When <condition>, this code does <wrong behavior> because <mechanism>, causing <impact>.
-
-Fix direction: <one sentence>.
-
-Related sites: file:LINE, file:LINE.   (omit if none)
-```
+The canonical finding shape — including the `Render proof:` / `Test proof:` lines for visibility-dependent findings, the producer-claim sentence shape, and the claim-vs-reality impact shape — lives in `reference/output-format.md` (§ *Finding shape*). Render every finding to that template; do not invent a variant.
 
 ### Hard output rules
 
-- **Order by severity, then by root-cause group.** Same-cause findings collapse to one entry with multiple `related_sites`. Never order by file.
+- **Order by severity, then root-cause group.** Same-cause findings collapse to one entry with multiple `related_sites`. Never order by file.
 - **ADR / spec / doc deviations are first-class findings** even if the code runs.
-- **No hedging** (`maybe`, `seems`, `possibly`, `might`, `appears to`). Uncertain high-risk → Open Questions, not findings.
-- **No confidence labels.** A finding is reported or it isn't.
+- **No hedging.** No `maybe`, `seems`, `possibly`, `might`, `appears to`. Uncertain high-risk → Open Questions. Low-confidence guesses → drop or compress to Residual Risk.
+- **No confidence labels.**
 - **No process narration**, no attribution, no praise filler, no time-spent mentions.
-- **Skip list applies:** pure style, *"consider X"* without bug, generic architecture, restating diff, low-confidence guesses, unmotivated test requests, speculative rewrites, *"feels risky"* without proof.
-- **Finding minimality.** Keep highest-signal items; move weak/low uncertainties to Residual Risk in coverage. Five clearly-actionable findings beat ten diluted ones.
-- **Zero findings:** state it explicitly. Do not pad to look productive. Coverage + Residual Risk + Test Gaps still printed.
-
----
+- **Skip list applies** — see `reference/output-format.md`.
+- **Finding minimality.** Group by root cause; drop weak items to Residual Risk. Five clearly-actionable findings beat ten diluted ones.
+- **Zero findings:** state it explicitly. Coverage + Residual Risk + Test Gaps still printed.
 
 ## Reference files
 
-Mandatory reads at specific points, not optional context.
+Read at the points named in the workflow, not as optional context.
 
 | File | Read when | Purpose |
 |---|---|---|
-| `reference/artifact-schema.md` | Before any artifact is written | Per-phase artifact templates and ID prefixes. |
-| `reference/bug-patterns.md` | Selected sections at Model, Search, Falsification phases | 15 heuristics priming attention to bug classes. |
-| `reference/claude-failure-modes.md` | Falsification and Review phases | 11 archetypes of reviews that miss bugs. |
-| `reference/output-format.md` | Review phase | Severity, finding shape, coverage footer, skip list, zero-findings rule. |
-
----
+| `reference/notes-file.md` | Before step 3 (enumerate surfaces) | Mandatory `notes.md` template + class taxonomy for the candidate ledger. |
+| `reference/bug-patterns.md` | Class-triggered lookup table at step 2; triggered full sections at step 6 (falsifications) | 19 heuristics priming attention to specific bug classes — read 2–4 sections per review. |
+| `reference/claude-failure-modes.md` | Cue column at step 2; full archetype 12–14 detail consulted at step 9 if a candidate fits one of those classes | 14 archetypes of Claude reviews missing bugs — cues prime sideways search; detail catches blind spots before promotion. |
+| `reference/output-format.md` | Before step 11 (write `review.md`) | Severity rubric, finding shape, skip list, coverage footer, zero-findings rule. |
 
 ## Failure modes — quick refusal table
 
@@ -465,10 +426,11 @@ Mandatory reads at specific points, not optional context.
 | Not in git AND no paths/snippet given | Refuse; ask operator for paths. |
 | Empty diff (git target) | Refuse with `nothing to review`. |
 | PR target — `<head_ref>` not present locally | Fetch read-only: `git fetch origin pull/<num>/head:refs/custom-review/pr-<num>`. Do not abort, do not checkout. |
-| PR target — local branch with same name as `<head_ref>` is ahead of GitHub's `<head_oid>` | Refuse with the unpushed-commits message in Hard preconditions #3. Print `git log --oneline <head_oid>..refs/heads/<head_ref>`. |
-| PR target — local branch with same name as `<head_ref>` has diverged from `<head_oid>` (neither ancestor) | Refuse with the diverged-branch message in Hard preconditions #3 (likely pending force-push). |
+| PR target — local branch ahead of GitHub's `<head_oid>` | Refuse with the unpushed-commits message in Hard preconditions #3. |
+| PR target — local branch diverged from `<head_oid>` | Refuse with the diverged-branch message in Hard preconditions #3. |
+| PR re-review — head unchanged, worktree has unstaged fixes on diff files | Review against worktree; report the worktree state per Hard preconditions #4. |
 | Target ambiguous | Ask one short multi-choice question. |
 | Operator passed `-` as trailing text | Ignore. |
-| `gh` unavailable for PR target | Refuse. Without `gh pr view`, head/base ref names cannot be resolved reliably. Ask the operator for explicit head/base (e.g. `/custom-review against <base>` from a branch that tracks the PR head) and proceed as a `branch` target. |
-| `tmp/` writes denied | Refuse — review cannot run without artifacts. |
+| `gh` unavailable for PR target | Refuse. Without `gh pr view`, head/base ref names cannot be resolved reliably. Ask the operator for explicit head/base (e.g. `/custom-review2 against <base>` from a branch that tracks the PR head). |
+| `tmp/` writes denied | Refuse — review cannot run without diff capture. |
 | `paths` target — listed paths do not exist | Refuse; list missing paths. |

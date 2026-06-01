@@ -91,3 +91,7 @@ preflight: <passed | returned-to=<step> reason=<one-line>>
 ## Length
 
 There is no hard length cap. The notes file scales with the diff. A small/clean PR's notes may be under 40 lines; a 20-file PR's notes typically run 200–400 lines. Verbose claim blocks beat skipped sub-checks.
+
+## Falsifications counter (mechanical, not prose)
+
+The reviewer does NOT write the falsifications count by hand. It is counted from the `falsifications:` lines under each `## Claims` block and their linked `## Candidates` statuses; `output-format.md`'s Coverage section template prescribes the rendering.
