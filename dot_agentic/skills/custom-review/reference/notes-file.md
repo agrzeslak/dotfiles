@@ -1,6 +1,6 @@
 # Notes file — `tmp/custom-review-<ts>/notes.md`
 
-**Mandatory** review artifact. Carries the enforcement that v1 spread across seven files: surface enumeration, falsifiable claims, per-claim falsifications + sub-checks, the candidate ledger (anti-trigger-shy), coverage transparency, and the preflight result.
+**Mandatory** review artifact. Carries the enforcement an earlier version spread across seven files: surface enumeration, falsifiable claims, per-claim falsifications + sub-checks, the candidate ledger (anti-trigger-shy), coverage transparency, and the preflight result.
 
 Read this file before workflow step 3 (enumerate surfaces). The structure below is required — the reviewer fills it in as the workflow progresses.
 
@@ -67,12 +67,12 @@ preflight: <passed | returned-to=<step> reason=<one-line>>
 ### `## Surfaces`
 
 - **Every changed semantic surface gets a line.** Deletions count. Be exhaustive — this is what the step-4 completeness-audit subagent checks against.
-- `grep_terms` should be narrow enough that step 7's classification doesn't recreate v1's process tax, but broad enough to catch sibling producers (include serialized aliases).
+- `grep_terms` should be narrow enough that step 7's classification doesn't recreate the old seven-file process tax, but broad enough to catch sibling producers (include serialized aliases).
 
 ### `## Claims`
 
 - **No claim cap.** If you have >8 claims, group by root-cause concept; the group's falsifications must still cover each member's distinct surface.
-- `tier:` anchors severity at step 9. Refactor-parity claims may start at `N/A` but must escalate to a real tier the moment parity breaks.
+- `tier:` anchors severity at step 9; the tiers are defined in `output-format.md` § *Severity rubric* (single source of truth — don't redefine them here). Refactor-parity claims may start at `N/A` but must escalate to a real tier the moment parity breaks.
 - `producer-realization:` is mandatory for any claim about a new producer. Start with `TBD` placeholders and finalize after step 7 search; a finalized row that reveals the consumer reads a default / unrelated config / stale cache / dead branch — or no consumer at all — is the producer-dead class. Promote a `Kn` immediately.
 - **≥3 falsifications per claim** with result tags. Small-mode (per SKILL.md *Risk-aware small mode*) relaxes this to ≥1 per claim plus two sub-checks (`failure_parity` + `backward_compat`).
 - **All four sub-checks per claim** must be addressed in normal mode: `finding | checked-no-issue | N/A reason=...`. No silent skips.

@@ -1,13 +1,13 @@
 ---
 name: multi-review
-description: Run three independent reviewers in parallel (codex `/review`, claude `/custom-review`, claude `/custom-review2`) against the same target, save verbatim outputs to `tmp/multi-review/`, synthesize a merged best-of review, optionally apply the fixes, then write an A/B evaluation comparing the three reviewers on accuracy, signal-to-noise, and depth. The evaluation is the point — it powers iterative improvement of the review skills. Codex runs as a plain `/review` with only the target; non-target trailing text after `/multi-review` is forwarded verbatim to the two claude reviewers as additional focus.
+description: Run two independent reviewers in parallel (codex `/review` and claude `/custom-review`) against the same target, save verbatim outputs to `tmp/multi-review/`, synthesize a merged best-of review, optionally apply the fixes, then write an A/B evaluation comparing the two reviewers on accuracy, signal-to-noise, and depth. The evaluation is the point — it powers iterative improvement of the review skills. Codex runs as a plain `/review` with only the target; non-target trailing text after `/multi-review` is forwarded verbatim to the claude reviewer as additional focus.
 ---
 
 # Multi Review
 
 ## Purpose
 
-`/multi-review` runs three independent code reviews of the same target in parallel and synthesizes a merged best-of review. After applying the fixes, the skill writes an evaluation of the three reviewers so the user can A/B-test review skills and improve them over time.
+`/multi-review` runs two independent code reviews of the same target in parallel — codex `/review` and claude `/custom-review` — and synthesizes a merged best-of review. After applying the fixes, the skill writes an evaluation of the two reviewers so the user can A/B-test the review skills and improve them over time.
 
 Key difference from `/codex-review`: this skill is **invoked fresh** (not after a prior `/review`). The target must be determined from `/multi-review` arguments, not from earlier conversation context.
 
@@ -15,17 +15,21 @@ Key difference from `/codex-review`: this skill is **invoked fresh** (not after 
 
 Refuse with a clear, short message if any fail:
 
-1. **Working directory is inside a git repository.** All three reviewers operate on a working tree.
+1. **Working directory is inside a git repository.** Both reviewers operate on a working tree.
 2. **`codex` is on `PATH`.** Run `command -v codex`. If missing, tell the operator to install codex.
-3. **The `custom-review` and `custom-review2` skills are available.** If either is missing from the available-skills list, refuse.
+3. **The `custom-review` skill is available.** If it is missing from the available-skills list, refuse.
 4. **`gh` is on `PATH` and authenticated** — *only* if the target is `pr`. Run `command -v gh` and `gh auth status`. If either fails, refuse with the missing piece.
 
 ## Step 1 — Parse args and determine target
 
-Split `/multi-review`'s trailing text into:
+Split `/multi-review`'s trailing text into three buckets:
 
 - **Target hints** — phrases that explicitly identify what to review (see table below).
-- **Focus text** — everything that doesn't match a target hint; forwarded verbatim to the two claude reviewers (custom-review and custom-review2) as additional focus. Codex is not given focus text — it runs as a plain `/review` with only the target flags.
+- **Control flags** — recognized control tokens that change skill behavior, not forwarded as focus text. Currently one is recognized:
+  - `--auto-apply` — skip the interactive "Apply these fixes now?" prompt in Step 5 and proceed straight to Step 6 (apply fixes). Use this when invoking `/multi-review` from another skill or subagent where no human is present to answer. The evaluation is still written in Step 8.
+- **Focus text** — everything that doesn't match a target hint or control flag; forwarded verbatim to the claude reviewer (custom-review) as additional focus. Codex is not given focus text — it runs as a plain `/review` with only the target flags.
+
+Parse control flags by splitting the trailing text on whitespace and removing any token that matches a recognized flag (`--auto-apply`) before computing target hints and focus text. Record the set of flags encountered for later steps.
 
 Target heuristics (parse from args; default to uncommitted):
 
@@ -50,7 +54,7 @@ If args are ambiguous (e.g., both a PR and a base named), ask one short multiple
 2. `git rev-parse --abbrev-ref HEAD` → current branch. If it doesn't match `headRefName`, abort: "PR head branch is `<headRefName>` but you're on `<currentBranch>`. Run `gh pr checkout <N>` and re-invoke."
 3. `git rev-parse HEAD` → current local OID. Compare to `headRefOid`:
    - **Equal** → proceed.
-   - **Local ahead** (PR head is an ancestor of HEAD): abort with `git push` guidance — codex would review your local commits but `custom-review` resolves the GitHub PR head, so the three reviewers would see different code.
+   - **Local ahead** (PR head is an ancestor of HEAD): abort with `git push` guidance — codex would review your local commits but `custom-review` resolves the GitHub PR head, so the two reviewers would see different code.
    - **Local behind** (HEAD is an ancestor of PR head): abort with `git fetch origin pull/<N>/head && git reset --hard FETCH_HEAD` guidance (or `gh pr checkout <N>`).
    - **Diverged**: abort with a "force-push or rebase to align" message; do not auto-resolve.
 4. Reject dirty worktree for `pr` targets: if `git status --porcelain` is non-empty, abort with "commit, stash, or discard before /multi-review on a PR" (the reviewers operate on different snapshots, so worktree drift breaks comparability).
@@ -77,7 +81,7 @@ Build two distinct strings — do not collapse them:
   - `branch` → `branch <currentBranch> against <X>`
   - `commit` → `commit <sha>`
   - `uncommitted` → `the uncommitted changes in the working tree`
-- **Canonical reviewer arg** (passed verbatim to subagents invoking custom-review/custom-review2; their resolution tables parse this):
+- **Canonical reviewer arg** (passed verbatim to the subagent invoking custom-review; its resolution table parses this):
   - `pr` → `<N>`
   - `branch` → `against <X>`
   - `commit` → `<sha>`
@@ -100,7 +104,6 @@ Output paths (project-local `tmp/`):
 
 - `tmp/multi-review/codex-<slug>.md`
 - `tmp/multi-review/custom-review-<slug>.md`
-- `tmp/multi-review/custom-review2-<slug>.md`
 - `tmp/multi-review/merged-<slug>.md`
 - `tmp/multi-review/evaluation-<slug>.md`
 
@@ -108,15 +111,14 @@ Plus per-reviewer status sidecars (see Step 3):
 
 - `tmp/multi-review/codex-<slug>.status.json`
 - `tmp/multi-review/custom-review-<slug>.status.json`
-- `tmp/multi-review/custom-review2-<slug>.status.json`
 
-**Collision check.** Before running anything, check if any of the seven files already exist. If yes: warn the operator listing which files exist, and ask via `AskUserQuestion` whether to overwrite. Exit on "no".
+**Collision check.** Before running anything, check if any of these files already exist. If yes: warn the operator listing which files exist, and ask via `AskUserQuestion` whether to overwrite. Exit on "no".
 
 Then `mkdir -p tmp/multi-review/`.
 
-## Step 3 — Spawn three reviewers in parallel
+## Step 3 — Spawn both reviewers in parallel
 
-All three start in a **single message** with three tool calls so they run concurrently.
+Both start in a **single message** with two tool calls so they run concurrently.
 
 ### Reviewer A — codex (background Bash)
 
@@ -165,56 +167,33 @@ Sample prompt (fill in concrete values):
 >
 > If the skill refuses or fails, reply with a single line: `FAILED: <one-sentence reason>`. Do not paraphrase or echo the review body in your reply.
 
-### Reviewer C — claude `/custom-review2` (Agent tool, foreground)
+### Why one Bash + one Agent in one message
 
-Same as Reviewer B but invoking the `custom-review2` skill (not `custom-review`).
-
-**Naming gotcha — read carefully.** The `custom-review2` skill writes its review into a directory named `tmp/custom-review-<timestamp>/` (note: same `custom-review-` prefix as the v1 skill — the `2` does *not* appear in its own output path). The two subagents therefore return `REVIEW_PATH=` values that look interchangeable. **Do not** identify which review is which by inspecting their source paths. Identify them solely by which subagent (B or C) returned the reply, and copy each to its correct destination:
-
-- Reviewer B's reply → `tmp/multi-review/custom-review-<slug>.md`
-- Reviewer C's reply → `tmp/multi-review/custom-review2-<slug>.md`  ← the `2` MUST be in this filename.
-
-If you overwrite Reviewer C's output into `custom-review-<slug>.md`, downstream Step 4 (synthesis) and Step 8 (evaluation) will silently treat the v2 review as the v1 review, and the evaluation will compare the wrong skills.
-
-### Why one Bash + two Agents in one message
-
-All three are independent; issuing them in a single message starts them in parallel. Codex runs in background because its 10-min timeout is longer than the Agents typically take; the two Agents are foreground (their results return when complete). After this message, monitor for the background codex completion before proceeding.
+Both are independent; issuing them in a single message starts them in parallel. Codex runs in background because its 10-min timeout is longer than the Agent typically takes; the custom-review Agent is foreground (its result returns when complete). After this message, monitor for the background codex completion before proceeding.
 
 ## Step 3.5 — Collect outputs into the canonical paths
 
-After all three reviewers finish, normalize their outputs so Step 4 can read predictable paths.
-
-Process Reviewers B and C **separately**, by which subagent returned the reply — never by inspecting `REVIEW_PATH`, which uses the same `tmp/custom-review-<timestamp>/` prefix for both skills (see "Naming gotcha" under Reviewer C).
+After both reviewers finish, normalize their outputs so Step 4 can read predictable paths.
 
 **Reviewer B (`custom-review`):**
 
 1. Parse Reviewer B's reply for `REVIEW_PATH=<...>`. If parsing fails or the file does not exist, treat as failure.
-2. On success: `Read` the source file, then `Write` its full contents to `tmp/multi-review/custom-review-<slug>.md` (no `2`). Use `Read` + `Write` rather than a shell `cp` so the file goes through normal write paths.
+2. On success: `Read` the source file (the skill writes it under its own `tmp/custom-review-<timestamp>/` directory), then `Write` its full contents to `tmp/multi-review/custom-review-<slug>.md`. Use `Read` + `Write` rather than a shell `cp` so the file goes through normal write paths.
 3. Write `tmp/multi-review/custom-review-<slug>.status.json`:
    ```json
    {"reviewer":"custom-review","ok":true,"source":"<REVIEW_PATH from B>","findings":<N>,"output":"tmp/multi-review/custom-review-<slug>.md"}
    ```
 4. On failure: write a placeholder `tmp/multi-review/custom-review-<slug>.md` containing exactly `FAILED: <reason>` and a status sidecar with `"ok":false,"reason":"<reason>"`.
 
-**Reviewer C (`custom-review2`):**
-
-1. Parse Reviewer C's reply for `REVIEW_PATH=<...>`. If parsing fails or the file does not exist, treat as failure.
-2. On success: `Read` the source file, then `Write` its full contents to `tmp/multi-review/custom-review2-<slug>.md` (the `2` MUST appear in this destination filename). Use `Read` + `Write` rather than a shell `cp`.
-3. Write `tmp/multi-review/custom-review2-<slug>.status.json` (note the `2`):
-   ```json
-   {"reviewer":"custom-review2","ok":true,"source":"<REVIEW_PATH from C>","findings":<N>,"output":"tmp/multi-review/custom-review2-<slug>.md"}
-   ```
-4. On failure: write a placeholder `tmp/multi-review/custom-review2-<slug>.md` containing exactly `FAILED: <reason>` and a status sidecar `tmp/multi-review/custom-review2-<slug>.status.json` with `"ok":false,"reason":"<reason>"`.
-
-**Post-write sanity check.** Before proceeding to Step 4, confirm that all of `tmp/multi-review/custom-review-<slug>.md`, `tmp/multi-review/custom-review2-<slug>.md`, and (if codex ran) `tmp/multi-review/codex-<slug>.md` exist as distinct files. If `custom-review2-<slug>.md` is missing, you forgot the `2` in a destination path above — find and rename before continuing.
+**Post-write sanity check.** Before proceeding to Step 4, confirm that `tmp/multi-review/custom-review-<slug>.md` and (if codex ran) `tmp/multi-review/codex-<slug>.md` exist as distinct files.
 
 For codex (Reviewer A): the status sidecar was already written by the bash command. If `exit != 0` or the output file is empty (`stat -c %s ... -eq 0`), update its status to `"ok":false` and leave the output file as-is (codex's own error messages are useful evidence).
 
-**Abort condition.** If all three reviewers report failure, print the three reasons and stop before merging. Otherwise proceed — partial runs still produce a useful merged review and evaluation.
+**Abort condition.** If both reviewers report failure, print the two reasons and stop before merging. Otherwise proceed — a single successful review still produces a useful merged review and evaluation.
 
 ## Step 4 — Synthesize merged review
 
-`Read` each of the three `tmp/multi-review/*-<slug>.md` outputs (skip any whose status sidecar is `"ok":false`). Produce **one** merged review and write it to `tmp/multi-review/merged-<slug>.md`.
+`Read` each of the two `tmp/multi-review/*-<slug>.md` outputs (skip either whose status sidecar is `"ok":false`). Produce **one** merged review and write it to `tmp/multi-review/merged-<slug>.md`.
 
 Synthesis rules (same as `codex-review` Step 5):
 
@@ -235,7 +214,9 @@ The evaluation step uses this directly; never lose it to in-memory state.
 
 Print the full contents of `merged-<slug>.md` inline in the chat.
 
-Then call `AskUserQuestion` with a yes/no:
+**If `--auto-apply` was passed in the args**, skip the prompt entirely: set `fixes_applied=true`, print a one-line notice ("auto-apply: applying all merged findings without prompting"), and proceed to Step 6. The evaluation in Step 8 is still written.
+
+Otherwise, call `AskUserQuestion` with a yes/no:
 
 - **Question:** "Apply these fixes now?"
 - **Options:** "Yes — apply all merged findings" / "No — skip fixes (evaluation still written)"
@@ -246,7 +227,7 @@ If "no": skip Steps 6 and 7, jump to Step 8 with the `fixes_applied=false` flag.
 
 ## Step 6 — Apply fixes (one pass, no per-finding checkpoint)
 
-(Only runs if the operator answered "yes" in Step 5.)
+(Runs if either the operator answered "yes" in Step 5, or `--auto-apply` was passed.)
 
 Apply every blocking and medium finding from the merged review in one pass. Optional/polish findings: apply if cheap, skip if invasive.
 
@@ -255,7 +236,7 @@ While fixing, keep brief notes for the evaluation step:
 - Which findings were real, partial, or false alarms once you got into the code.
 - Which findings required reading code the reviewer didn't cite (under-statement).
 - Which findings exaggerated severity or impact (over-statement).
-- Which findings were uniquely deep (would have been missed by the other two).
+- Which findings were uniquely deep (would have been missed by the other reviewer).
 
 Do not prompt the user between findings.
 
@@ -290,7 +271,7 @@ Required sections:
 
 ### 2. Per-reviewer scorecard
 
-One subsection per reviewer (codex, custom-review, custom-review2). For each, report:
+One subsection per reviewer (codex, custom-review). For each, report:
 
 - **Findings raised:** count, with severity breakdown.
 - **Real findings:** how many turned out to be real after fixing. Cite 1–3 by short title. *(If `fixes_applied=false`: `not assessed (fixes declined)` — but still report the merge-stage decisions from `provenance-<slug>.md`: kept after re-read vs. dropped as hallucination.)*
@@ -302,15 +283,37 @@ One subsection per reviewer (codex, custom-review, custom-review2). For each, re
 
 ### 3. Comparison table
 
-Single markdown table. Rows: total findings, kept-after-merge, real-after-fix (or `—` if declined), false positives, blocking real / claimed, unique-real (or unique-kept), S/N ratio, depth rank (1–3). One column per reviewer.
+Single markdown table. Rows: total findings, kept-after-merge, real-after-fix (or `—` if declined), false positives, blocking real / claimed, unique-real (or unique-kept), S/N ratio, depth rank (1–2). One column per reviewer.
 
 ### 4. Narrative (2–4 paragraphs)
 
-Which review was most useful and why, in concrete terms grounded in either the fix experience or the merge-stage evidence. Which was least useful and why. Patterns visible across runs that hint at skill improvements (e.g., "`custom-review2` consistently over-states React render-path claims" or "`codex` misses cross-file consumer searches"). Avoid generic praise; cite findings.
+Which review was most useful and why, in concrete terms grounded in either the fix experience or the merge-stage evidence. Which was least useful and why. Patterns visible across runs that hint at skill improvements (e.g., "`custom-review` consistently over-states TUI render-path claims" or "`codex` reliably catches cross-component / sibling-parity bugs `custom-review` misses by validating components in isolation"). Avoid generic praise; cite findings.
 
 ### 5. Skill-improvement hypotheses
 
-A short bullet list of concrete edits to `custom-review`, `custom-review2`, or the codex prompt that would have improved this run. Each bullet names the skill, the change, and the finding(s) that motivated it. This is the deliverable that makes the A/B testing actionable.
+A short bullet list of concrete edits to `custom-review` or the codex prompt that would have improved this run. Each bullet names the skill, the change, and the finding(s) that motivated it. This is the deliverable that makes the A/B testing actionable.
+
+### 6. Open-Question resolution status
+
+For each Open Question raised by any reviewer in their original `tmp/multi-review/*-<slug>.md`, walk the merged fix commit (and any Finding from another reviewer that landed in the merge) for code that defends the OQ's path — a check, regression test, error return, fallback, or bounds check citing the same condition.
+
+Format as a bullet list, one entry per OQ:
+
+```
+- **<reviewer>**: <OQ short title> at <file:line>
+  - status: <resolved-by-fix → <commit SHA / Finding ID> | carried (no defending change found) | not-applicable (fixes declined)>
+  - one-line pointer if resolved
+```
+
+Rules:
+
+1. This section reads the OQs verbatim from each reviewer's review file at `tmp/multi-review/<reviewer>-<slug>.md`. Do not infer OQs from the merged review — only the originals.
+2. An OQ is `resolved-by-fix` only if a defending change in the fix commit (or merged Finding) cites the same condition. A change that merely touches the file is not a defence.
+3. `carried` is the default when no defending change exists. It means the OQ is still open against the post-fix code.
+4. If `fixes_applied=false`, every OQ is `not-applicable (fixes declined)`.
+5. Do NOT modify the original reviewer's review file. The annotation lives only in `evaluation-<slug>.md`.
+
+This surfaces credit/attribution for OQs that a peer reviewer's Finding (or codex's fix-driving framing) defended against — critical for the cumulative dataset's understanding of which OQ → fix paths are real signal. See `/home/andrzej/.agentic/tmp/cr2-iteration/multi-review-followup-D3.md` for the original rationale (PR #139 R1 OQ1 → codex F1 chain).
 
 After writing the evaluation, print only a short summary to the operator:
 
@@ -326,7 +329,7 @@ Do not re-print the evaluation in full — the operator can read the file.
 |---|---|
 | Not inside a git repo | Refuse |
 | `codex` not on `PATH` | Refuse |
-| `custom-review` or `custom-review2` skill missing | Refuse |
+| `custom-review` skill missing | Refuse |
 | `gh` missing or unauthenticated (PR target only) | Refuse with the specific missing piece |
 | Args use rejected shorthand (`branch X`, `staged`) | Refuse with the corrected form |
 | Args ambiguous (multiple target hints) | One short multiple-choice question |
@@ -335,6 +338,7 @@ Do not re-print the evaluation in full — the operator can read the file.
 | PR target with dirty worktree | Abort; tell operator to commit, stash, or discard first |
 | Target has no diff | Refuse |
 | Output files already exist for this slug | `AskUserQuestion` overwrite y/n; exit on no |
-| One reviewer fails / empty / times out | Write `FAILED:` placeholder + status sidecar; continue with the others |
-| All three reviewers fail | Print the three reasons and exit before merging |
+| One reviewer fails / empty / times out | Write `FAILED:` placeholder + status sidecar; continue with the other |
+| Both reviewers fail | Print the two reasons and exit before merging |
 | Operator declines to fix | Skip Steps 6–7; still write evaluation with fix-grounded fields marked `not assessed` |
+| `--auto-apply` passed in args | Skip the Step 5 prompt; apply all merged findings automatically; evaluation still written |

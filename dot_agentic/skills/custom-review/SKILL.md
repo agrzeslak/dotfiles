@@ -1,13 +1,13 @@
 ---
-name: custom-review2
+name: custom-review
 description: Use when an in-depth correctness review of pending code is wanted — PR/diff review, implementation QA, ADR/spec compliance checks, regression hunting, "is this change safe to merge", or review-style questions about whether code changes are safe. Performs a read-only review that promotes findings only when proof of condition, wrong behavior, and concrete impact lives at file:line. Producer-claims must name the actual source of truth at the effect site; user-visible claims must cite a render path or test; doc/comment/dead-state claims are gated on whether the codebase currently claims something false. Unverified suspicions drop to Open Questions or are discarded. Heavier than `/review`; use when depth matters more than speed.
 ---
 
-# Custom Review (v2)
+# Custom Review
 
 A read-only review with **two review artifacts and one diff capture**: `notes.md` is the enforcement substrate (mandatory; mandatory inline structure forces falsification depth, candidate accounting, severity anchoring, and return loops); `review.md` is the rendered output. `diff.patch` is a supporting capture, not a review artifact.
 
-The v1 skill wrote seven artifact files. The v2-1 (this) version collapses that to two review artifacts while preserving v1's anti-skipping enforcement — what was paperwork in v1's pipeline becomes mandatory inline sections in a single notes file. Empirical lesson from R11/R12: making the ledger optional and dropping per-claim falsification depth turned the skill into a shallower variant of itself; this version restores both without the seven-file ceremony.
+An earlier version of this skill wrote seven artifact files. This version collapses that to two review artifacts while preserving the same anti-skipping enforcement — what was paperwork in the seven-file pipeline becomes mandatory inline sections in a single notes file. Empirical lesson: making the ledger optional and dropping per-claim falsification depth turned the skill into a shallower variant of itself; this version keeps both without the seven-file ceremony.
 
 ## Core principle
 
@@ -35,7 +35,7 @@ Refuse with a short, clear message if:
    - **Diverged** (neither ancestor of the other): refuse with `Local branch <name> has diverged from GitHub's PR head (likely pending force-push). Push the rewritten branch and re-run.`
 
    The branch being checked is the PR's head branch *by name*, NOT the operator's currently-checked-out branch. Resolve and inspect `refs/heads/<head_ref>` specifically. Also check `git worktree list --porcelain` — the same ref applies regardless of where it's checked out. The check uses only `git rev-parse` and `git merge-base --is-ancestor`; nothing is mutated. PR-target only — for `branch`/`commit`/`uncommitted` the local working state IS what gets reviewed.
-4. **PR re-review with stable head + dirty worktree.** When a prior `tmp/custom-review-*/review.md` exists for the same PR at the same `<head_oid>` (compare against the prior `review.md`'s mandatory metadata header — see *Output structure*), run `git status --porcelain` and check whether any modifications touch files in `git diff <base_ref>...<head_ref> --name-only`. If yes, do NOT re-emit prior findings as still-open — review against the worktree state and report: `PR head unchanged since prior review; worktree has uncommitted modifications on N of the diff's files. Reviewing against worktree state. Recommend the operator commit and push these fixes before the next round.` This guards against R7-style stale re-emission. The lookup uses `review.md` since it is the public output; `notes.md` may also be checked for additional context about a prior run.
+4. **PR re-review with stable head + dirty worktree.** When a prior `tmp/custom-review-*/review.md` exists for the same PR at the same `<head_oid>` (compare against the prior `review.md`'s mandatory metadata header — see *Output structure*), run `git status --porcelain` and check whether any modifications touch files in `git diff <base_ref>...<head_ref> --name-only`. If yes, do NOT re-emit prior findings as still-open — review against the worktree state and report: `PR head unchanged since prior review; worktree has uncommitted modifications on N of the diff's files. Reviewing against worktree state. Recommend the operator commit and push these fixes before the next round.` This guards against stale re-emission of already-fixed findings. The lookup uses `review.md` since it is the public output; `notes.md` may also be checked for additional context about a prior run.
 
    **Legacy prior reviews:** ignore any prior `review.md` that does not contain the `custom-review-meta` header block at the top. Those predate this guard and cannot be reliably matched to a `<head_oid>`. Proceed as a fresh review.
 
@@ -88,7 +88,7 @@ Read, in order:
 
 Open `notes.md` and write the **`## Surfaces`** section: every changed semantic surface — fields, types, enum variants, statuses, routes, endpoints, query/cache keys, event/job/queue names, feature flag keys, config keys, permission names, database columns, serialization names, exported helpers/hooks/components, public types, public functions, env vars, error codes, log keys, metric names. **Deletions count.**
 
-For each surface, refine `grep_terms` so the list includes the actual identifiers AND every serialized alias (camelCase ↔ snake_case ↔ kebab-case, route slugs, DB column variants, old form after rename). A broad `grep_terms` recreates v1's process tax at step 7; a narrow one misses sibling producers.
+For each surface, refine `grep_terms` so the list includes the actual identifiers AND every serialized alias (camelCase ↔ snake_case ↔ kebab-case, route slugs, DB column variants, old form after rename). A broad `grep_terms` recreates the old seven-file process tax at step 7; a narrow one misses sibling producers.
 
 `## Surfaces` is mandatory. Refer to *Notes file* for the exact line shape.
 
@@ -109,13 +109,15 @@ Write `## Claims` in `notes.md`. For each meaningful change in the diff, one fal
 Refactor-claims (*"no behavioral change"* — often the most violated) and deletion-claims (*"the removed thing is unused"*) count. **No claim cap.** If you end up with more than 8 claims, group by root-cause concept — but the group's falsifications at step 6 must still cover each member's distinct surface. Grouping is organizational, not skipping.
 
 Each claim block carries:
-- `tier:` — the rubric tier (`observable-wrong-behavior` / `silent-state-divergence` / `contract-violation-not-yet-visible` / `procedural-doc-drift` / `comment-precision` / `N/A`). The tier anchors severity at step 9; refactor-parity claims start at `N/A` but must be escalated to a real tier the moment parity breaks.
+- `tier:` — the rubric tier (`observable-wrong-behavior` / `silent-state-divergence` / `contract-violation-not-yet-visible` / `procedural-doc-drift` / `comment-precision` / `N/A`), defined with floors and ceilings in `reference/output-format.md` § *Severity rubric — procedural vs. semantic* (the single source of truth for these tiers). The tier anchors severity at step 9; refactor-parity claims start at `N/A` but must be escalated to a real tier the moment parity breaks.
 - `surfaces:` — the `Sn` IDs from step 3 the claim covers.
 - A `producer-realization:` line for any claim about a new producer (writer / dispatch arm / editor / setter / event emitter / status field / persisted record / config key / exported helper that affects current behavior). The fields:
   ```
   producer-realization: producer=<file:line>; produced=<value>; intended-consumer=<concept>; actual-read-site=<TBD-until-step-7|file:line>; source-of-truth-at-read=<TBD-until-step-7|concrete>; observable-effect=<one-line>
   ```
-  Start the row with `actual-read-site` and `source-of-truth-at-read` deferred to step 7; finalize after sideways search. A finalized row that reveals the consumer reads `Default::default()`, `unwrap_or_default`, an unrelated config, a stale cache, or a dead branch — or no consumer at all — is the producer-dead class (R10 P1, R6 assemble, R7 TUI rollback). Promote a candidate immediately.
+  Start the row with `actual-read-site` and `source-of-truth-at-read` deferred to step 7; finalize after sideways search. A finalized row that reveals the consumer reads `Default::default()`, `unwrap_or_default`, an unrelated config, a stale cache, or a dead branch — or no consumer at all — is the producer-dead class. Promote a candidate immediately.
+
+  **Inverse lens — returned-value discarded.** Producer-realization tracks a produced value flowing *toward* a read site. Run the mirror check too: for any function whose return value a sibling caller or a contract persists/propagates, does a NEW caller in the diff simply *drop* it (`let _ = f()`, unused `Ok(_)`, a success arm that ignores the returned value)? A cleanly-realized producer row does not clear this — the discarded-return defect lives at the *caller*, not the producer. See `reference/bug-patterns.md` #20; pair with the sibling behavior-parity diff (#3) since the discard usually shows up as asymmetry against a sibling that persists the value (e.g. a divert path drops a capture its normal-send sibling persists).
 
 **Concrete planned realization (dormant producer with named activation surface).** If a `producer-realization:` line finalizes to no current `actual-read-site`, but the PR text or diff structure shows this arm is the canonical implementation for a named upcoming surface, promote correctness defects in the arm to findings (severity per activation impact), not Residual Risk. The "concrete impact at file:line" gate reads as *"impact lands when the planned consumer ships,"* not *"impact lands today."* This rule overrides the no-consumer dead-state default only for concrete planned realization; without the evidence below, dormant arms stay dead-state / Residual Risk per the existing default.
 
@@ -165,15 +167,15 @@ New `rustdoc::private_intra_doc_links` / `rustdoc::broken_intra_doc_links` / unr
 
 Pre-existing warnings unchanged in count are out of scope. Compare counts (and categories), not absolute presence.
 
-**Trigger:** any refactor whose diff moves `pub` / `pub(crate)` items with `///` docstrings between modules or files. PR #183 demonstrated this is the only lens that catches the class — 7 consecutive clean refactor PRs (#177–#184) and the only true positive came from this check.
+**Trigger:** any refactor whose diff moves `pub` / `pub(crate)` items with `///` docstrings between modules or files. In practice this is the only lens that catches the class — across a run of otherwise byte-clean refactors, the doc-link regression was the sole true positive the check produced.
 
 ### 8. Read tests as artifacts + build the candidate ledger
 
 For every test file touched by the diff AND every test file discovered while tracing claims at steps 6–7:
 
 - **Fixture blindness:** what does the fixture make impossible to fail? Two sub-cases:
-  - **Value-masking:** a fixture that pre-assigns inputs which are globally distinct, globally valid, or always-unique can hide a producer's real-world collision/failure mode. For every producer with a falsifiable claim at step 6, ask *"does the fixture feed it values that can never collide / never be malformed / never overlap the way production values do?"* (PR #194 F4: `seed_ws_messages` used globally-unique seq, masking the per-direction-seq collision).
-  - **Producer-bypass:** does any test actually drive the real producer function, or do all fixtures construct the intermediate/output struct directly and never call it? A test that builds the result type by hand and asserts on it exercises nothing the producer does — the producer can ship broken and stay green. For every producer with a step-6 claim, confirm at least one test calls it (PR #203: gutter tests built `FindingGutterIndex` directly and never drove `finding_gutter_index()`, so the status-fold bug shipped green).
+  - **Value-masking:** a fixture that pre-assigns inputs which are globally distinct, globally valid, or always-unique can hide a producer's real-world collision/failure mode. For every producer with a falsifiable claim at step 6, ask *"does the fixture feed it values that can never collide / never be malformed / never overlap the way production values do?"* (e.g. a fixture that seeds globally-unique sequence numbers masks a per-direction-seq collision).
+  - **Producer-bypass:** does any test actually drive the real producer function, or do all fixtures construct the intermediate/output struct directly and never call it? A test that builds the result type by hand and asserts on it exercises nothing the producer does — the producer can ship broken and stay green. For every producer with a step-6 claim, confirm at least one test calls it (e.g. gutter tests build a `FindingGutterIndex` directly and never drive `finding_gutter_index()`, so a status-fold bug ships green).
 - **Assertion correctness:** does the assertion encode the regression?
 - **Coverage gaps:** which `reachable-defect` lines from step 6 does this test not cover?
 
@@ -214,7 +216,7 @@ Skip for purely local Low findings — the operator's own re-read at step 9 is t
 
 ### 11. Failure-mode preflight & write outputs
 
-Silently answer the 12-question preflight (one line each, internal; not printed to chat). Any "no" returns to the named step and re-runs everything downstream:
+Silently answer the 13-question preflight (one line each, internal; not printed to chat). Any "no" returns to the named step and re-runs everything downstream:
 
 1. (step 2) Did I read CLAUDE.md / AGENTS.md / ADRs, run the ADR drift sweep, and prime patterns?
 2. (step 7) Did I extend past changed lines into producers, consumers, and downstream effects?
@@ -228,6 +230,7 @@ Silently answer the 12-question preflight (one line each, internal; not printed 
 10. (step 6 / step 7) Did I separate UI gating from server-side authorization for every permission-touching change?
 11. (step 6) Did I check backward compatibility against old data / old clients / old configs / old enums / cached state / persisted UI state?
 12. (step 8) For every producer with a step-6 claim, did I verify a test actually drives the producer fn (not just constructs its output struct) AND that the fixture exercises its real failure modes rather than pre-assigning values (globally-unique IDs, always-valid inputs, non-colliding counters) that mask them?
+13. (step 3 / step 5 / step 7) For every change spanning >1 component, mirroring a sibling, or finalizing data from a separate task, did I review it by *composition* rather than per-component-in-isolation — i.e. diff the new path against its sibling for behavior the sibling has and it lacks (#3), check whether any returned value is discarded before persistence (#20), confirm every async teardown path reaches the completeness signal (#21), and for UI→command→output edit chains assert the output artifact carries the operator's *full* edit, not just one component (#19 step 3)?
 
 Record exactly `preflight: passed` in `## Preflight` once all questions are "yes" and downstream rework is complete. Do not render `review.md` while a `returned-to=<step>` state is open; `returned-to` is transient.
 
@@ -248,7 +251,7 @@ For diffs where ALL of the following are true:
 
 ## Notes file
 
-`tmp/custom-review-<ts>/notes.md` is **mandatory**, not optional. Its structure carries the enforcement that v1 spread across seven files. See `reference/notes-file.md` for the template; the mandatory sections are: `## Surfaces`, `## Claims`, `## Candidates`, `## Coverage`, `## Preflight`.
+`tmp/custom-review-<ts>/notes.md` is **mandatory**, not optional. Its structure carries the enforcement an earlier version spread across seven files. See `reference/notes-file.md` for the template; the mandatory sections are: `## Surfaces`, `## Claims`, `## Candidates`, `## Coverage`, `## Preflight`.
 
 The meta-fixer / operator adjudicates only `review.md`. `notes.md` is reviewer-internal — used by the reviewer to enforce the workflow on itself; not credit-bearing for benchmarking.
 
@@ -271,11 +274,7 @@ If you cannot supply all of these, the candidate cannot be a finding. Drop, move
 
 ### Producer-claim findings
 
-A producer-claim finding's text MUST name: the producer (file:line), the produced value, the actual read site (file:line), the actual source of truth at that read site, and the observable effect. Example shape:
-
-> `src/editor.rs:120` writes `agent_permissions` to `config.toml`, but the command path at `src/engine.rs:211` constructs permissions from `AgentPermissionsConfig::default()` instead of reading that file. So `Ctrl+G` saves successfully while the engine continues using defaults.
-
-That sentence contains producer / produced value / actual read site / source of truth / effect, all without a schema. No separate `[Cr]` record needed.
+A producer-claim finding's text MUST name, in one sentence: the producer (file:line), the produced value, the actual read site (file:line), the actual source of truth at that read site, and the observable effect — no schema, no separate `[Cr]` record. The canonical example sentence lives in `reference/output-format.md` § *Producer-claim finding shape*; render to that single-source shape rather than restating it here.
 
 ### Visibility-dependent findings
 
@@ -286,7 +285,7 @@ If the finding's impact statement names a user-visible artifact (modal, banner, 
 
 If neither proof is available, the candidate is not a finding. The default disposition is **drop** (or surface as a one-line Residual Risk in coverage if it has weak Low-severity merit). Move to Open Questions only when the uncertainty itself is Critical/High — i.e. a real possibility of user-visible breakage where the missing render-path/test evidence is what blocks confirmation. This matches the Open Questions policy in `output-format.md` (the safety valve is for high-risk uncertainty, not for "I noticed but couldn't prove" candidates).
 
-This blocks the R10 F2 class: tracing operation order correctly (mode flip → drain → spawn) but conflating *"operation queued"* with *"user sees outcome"* without proving the render path.
+This blocks the class where the reviewer traces operation order correctly (mode flip → drain → spawn) but conflates *"operation queued"* with *"user sees outcome"* without proving the render path.
 
 **Prompt-command / keybinding dispatch claims.** For findings whose user-visible impact is *"a keybinding produces wrong or no behaviour"* or *"a prompt-command / menu item / MCP tool / CLI subcommand dispatch fails"*, the `Render proof:` requirement is satisfied by citing the **dispatch chain**: the operator-facing binding → command emitter → engine-command receiver → producing handler, at file:line for each hop. The dispatch chain IS the render-path equivalent for this class — no need to trace through to a TUI redraw.
 
@@ -294,19 +293,23 @@ This blocks the R10 F2 class: tracing operation order correctly (mode flip → d
 
 This is **NOT** a general gate relaxation. It applies only to findings whose impact is *dispatch failure* (binding fires but the command is rejected, no-ops, targets a stale ID / pane / context, or the precondition is never realized). For findings about *what the screen draws after dispatch succeeds* (stale status line, missing modal, wrong list contents, render artefact), the original `Render proof:` requirement still applies.
 
-This addresses the PR #158 round-1 miss class: codex caught four real P2 dispatch bugs (dead `t` binding, dead `j/k` Listener-tab bindings, `scope_selected` never auto-selects, non-Proxy-pane data wipe) that satisfied condition + behaviour + impact at file:line but were rejected because the impact was *"operator presses a key and nothing happens"* rather than a screen-draw claim. The dispatch-chain carve-out admits this class without admitting screen-render hedging.
+This addresses a real miss class: dispatch bugs (a dead keybinding, a tab-binding that never fires, a `scope_selected` that never auto-selects, a non-target-pane data wipe) that satisfy condition + behaviour + impact at file:line but get rejected because the impact is *"operator presses a key and nothing happens"* rather than a screen-draw claim. The dispatch-chain carve-out admits this class without admitting screen-render hedging.
 
 ### Claim-vs-reality findings (doc / comment / dead-state)
 
 For candidates whose defect is *"the codebase claims something false"* (comment overstates what the code does; doc bullet contradicts impl; defensive flag with no observable read; dead dispatch arm; stale section in a runtime-model doc), the verification gate is **NOT** *"is the headline bug reachable through this?"* — it IS *"is the claim currently false?"*
 
 - Claim currently false → finding. Severity floor: Low. Severity ceiling: Medium (per the severity rubric in `output-format.md`). Promote to High only if a documented future consumer is in the same PR and the false claim will mislead them.
-- Claim currently true → drop the candidate.
+- Claim currently true → drop the candidate **as a claim-vs-reality finding only**. See the carve-out below before discarding the candidate entirely.
 - *"The headline bug isn't reachable through this comment"* is NOT a valid drop reason. The codebase still claims something false regardless of whether the original bug is reachable.
 
-The "for whom does it break?" question for these findings is *"maintainers will act on a false model"* — make that explicit in the impact statement.
+**Claim-true-but-behavior-wrong carve-out.** This gate scores the *comment / doc / claim*, not the behavior it describes. A comment that is *literally accurate about what the code does* does NOT clear a candidate when the accurately-described **behavior is itself the defect.** When `claim-currently-true`, ask the second question before dropping: *"is the behavior this true claim describes correct?"* If the behavior is wrong, the finding is a **behavioral** finding — route the candidate back through the normal producer-realization / sibling-parity / correctness gates (steps 5–9) and promote on the behavior, with severity per the behavior's impact. Do NOT record `status=dropped reason=claim-currently-true`; that drop reason is reserved for candidates whose *only* asserted defect was the comment, and whose described behavior is correct.
 
-This is custom-review's strongest demonstrated niche (doc-vs-impl-lies n=4 across R5/R6/R8/R10). It fires only when the gate is applied; trigger-shyness suppresses it.
+> Example: a `cycle_send_mode` comment says *"re-cycle to refresh"* — literally accurate — so the claim-vs-reality gate scores the comment true and drops the candidate. But the behavior the true comment describes is the defect: `to_request()` clones **stale** `H2cUpgrade` authority/path after an edit-after-toggle instead of re-deriving from the live pseudo-headers. The finding is real; only its routing was wrong.
+
+The "for whom does it break?" question for genuine claim-vs-reality findings is *"maintainers will act on a false model"* — make that explicit in the impact statement.
+
+This is one of the review's strongest niches (doc-vs-impl-lies). It fires only when the gate is applied; trigger-shyness suppresses it — and the carve-out above is the symmetric guard against the gate *over*-firing into a false drop.
 
 ### Test-derived findings
 
@@ -415,9 +418,11 @@ Read at the points named in the workflow, not as optional context.
 | File | Read when | Purpose |
 |---|---|---|
 | `reference/notes-file.md` | Before step 3 (enumerate surfaces) | Mandatory `notes.md` template + class taxonomy for the candidate ledger. |
-| `reference/bug-patterns.md` | Class-triggered lookup table at step 2; triggered full sections at step 6 (falsifications) | 19 heuristics priming attention to specific bug classes — read 2–4 sections per review. |
-| `reference/claude-failure-modes.md` | Cue column at step 2; full archetype 12–14 detail consulted at step 9 if a candidate fits one of those classes | 14 archetypes of Claude reviews missing bugs — cues prime sideways search; detail catches blind spots before promotion. |
+| `reference/bug-patterns.md` | Class-triggered lookup table at step 2; triggered full sections at step 6 (falsifications) | 21 heuristics priming attention to specific bug classes — read 2–4 sections per review. |
+| `reference/claude-failure-modes.md` | Cue column at step 2; archetype 12–14 detail consulted at step 9 if a candidate fits one of those classes (modes 15–17 point to their bug-patterns) | 17 archetypes of Claude reviews missing bugs — cues prime sideways search; detail catches blind spots before promotion. |
 | `reference/output-format.md` | Before step 11 (write `review.md`) | Severity rubric, finding shape, skip list, coverage footer, zero-findings rule. |
+
+`reference/maintaining.md` is **not** part of a review — do not read it while reviewing. It is the discipline for *editing* this skill (read-path budgets, merge-don't-only-append, generic examples, single source of truth). Consult it only when changing the skill itself.
 
 ## Failure modes — quick refusal table
 
@@ -431,6 +436,6 @@ Read at the points named in the workflow, not as optional context.
 | PR re-review — head unchanged, worktree has unstaged fixes on diff files | Review against worktree; report the worktree state per Hard preconditions #4. |
 | Target ambiguous | Ask one short multi-choice question. |
 | Operator passed `-` as trailing text | Ignore. |
-| `gh` unavailable for PR target | Refuse. Without `gh pr view`, head/base ref names cannot be resolved reliably. Ask the operator for explicit head/base (e.g. `/custom-review2 against <base>` from a branch that tracks the PR head). |
+| `gh` unavailable for PR target | Refuse. Without `gh pr view`, head/base ref names cannot be resolved reliably. Ask the operator for explicit head/base (e.g. `/custom-review against <base>` from a branch that tracks the PR head). |
 | `tmp/` writes denied | Refuse — review cannot run without diff capture. |
 | `paths` target — listed paths do not exist | Refuse; list missing paths. |

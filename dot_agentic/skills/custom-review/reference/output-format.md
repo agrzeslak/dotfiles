@@ -2,7 +2,7 @@
 
 Read before workflow step 8 (write the rendered review). This file fixes the severity definitions, finding shape, ordering, coverage footer, skip list, and the zero-findings honesty rule.
 
-The output rules are written as **hard prohibitions** where Codex's interview was emphatic. Treat them as gates, not suggestions.
+The output rules are written as **hard prohibitions**. Treat them as gates, not suggestions.
 
 ---
 
@@ -40,7 +40,7 @@ Minor confirmed defects: misleading UI copy tied to state, recoverable bad behav
 
 ## Severity rubric — procedural vs. semantic
 
-Severity must reflect the kind of defect, not the kind of source it violates. R6 fixer critique on v1: *"the doc-table-stale finding is rated Medium primarily on the strength of AGENTS.md prose, which is more procedural than semantic. The `write_value` rollback bug — command Err but state mutated — is rated Low. That underweights a real 'command Err ⇒ silent state mutation' contract violation."*
+Severity must reflect the kind of defect, not the kind of source it violates. A worked critique that motivates this rubric: *"the doc-table-stale finding is rated Medium primarily on the strength of AGENTS.md prose, which is more procedural than semantic. The `write_value` rollback bug — command Err but state mutated — is rated Low. That underweights a real 'command Err ⇒ silent state mutation' contract violation."*
 
 **Ordering (highest impact first):**
 
@@ -152,7 +152,7 @@ These words and patterns are **forbidden** in any finding:
 
 ## Skip list (do not include these as findings)
 
-Codex's discipline: omit anything that does not help the author prevent a real defect or meaningful maintenance risk. Specifically:
+The discipline: omit anything that does not help the author prevent a real defect or meaningful maintenance risk. Specifically:
 
 - **Pure style preferences** (indentation, brace style, line length, etc.) — handled by linters.
 - **Naming nits** that don't cause misuse. (`userCount` vs `numUsers` does not cause bugs.)
