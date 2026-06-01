@@ -90,7 +90,13 @@ Anti-rule: never dispatch round N+1 solely to confirm the fixes from round N lan
 
 The plan from step 2 is now hardened. Implement it using `superpowers:subagent-driven-development` as the execution model and `superpowers:test-driven-development` as the methodology — each task in the plan is dispatched to a subagent that writes tests first, then implementation, then verifies.
 
-Follow the subagent-driven-development skill exactly for fan-out/serialization rules. Each subagent receives the plan path, the specific task it owns, and instructions to use TDD.
+Follow the subagent-driven-development skill exactly for fan-out/serialization rules. Each subagent receives the plan path, the specific task it owns, instructions to use TDD, and the comment-hygiene directive below.
+
+**Comment hygiene — include this verbatim in every code-writing subagent prompt (both this step and step 5):**
+
+> The plan's task, PR, wave, and commit identifiers (e.g. `Task 4`, `PR 6`, `H2-PR-2`, `Lane J Task 17`) and the plan file name are orchestration scaffolding for this run — not documentation of the code. **Never carry them into code or doc comments.** Every comment must describe present behavior, intent, or rationale for a reader who never saw the plan. If a reference is genuinely load-bearing for an explanation, cite a durable, externally-resolvable handle — a concrete GitHub `#NNN` or `ADR NNNN` — never an internal task/PR/plan label. (This mirrors the "Comments describe the code, not the process that produced it" rule in the repo's `AGENTS.md`; defer to that file if it conflicts.)
+
+This is the root-cause fix for process-reference leakage: the labels are salient in a subagent's context precisely because we hand it a numbered task, so the prohibition has to travel with the task.
 
 After all tasks complete, run `superpowers:verification-before-completion` against the plan's acceptance criteria before moving on. If any verification fails, dispatch a fix-up subagent and re-verify.
 
@@ -128,6 +134,8 @@ Per round:
    produce per-reviewer A/B notes.
 
    Apply every finding regardless of severity. Commit fixes with a clear semantic message.
+   Obey the comment-hygiene directive from step 3: never introduce task/PR/wave/plan
+   labels into code or doc comments — describe the code, or cite a concrete `#NNN`/`ADR`.
 
    **TDD for fixes — when appropriate:** Before implementing a fix, decide whether a failing
    unit test should be written first. Add a test first when the finding describes a behavioral
