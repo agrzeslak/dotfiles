@@ -1,11 +1,13 @@
 ---
 name: plan-implement-merge
-description: End-to-end pipeline that plans a change with superpowers, hardens the plan via a codex + plan-review-skill review loop, implements it test-driven via subagents, opens a PR, drives a multi-review iteration loop until no critical findings remain, then runs cleanup. Use when the user invokes `/plan-implement-merge <description or path>` and wants the whole plan → review → implement → PR → review → merge pipeline run autonomously. Argument is auto-detected as a file path (if it resolves on disk) or treated as an inline description otherwise.
+description: End-to-end pipeline that plans a change with superpowers, hardens the plan via a codex + plan-review-skill review loop, implements it test-driven via subagents, opens a PR, drives a multi-review iteration loop until no critical findings remain, gates the merge on a green CI run, then runs cleanup. Use when the user invokes `/plan-implement-merge <description or path>` and wants the whole plan → review → implement → PR → review → merge pipeline run autonomously. Argument is auto-detected as a file path (if it resolves on disk) or treated as an inline description otherwise.
 ---
 
 # Plan → Implement → Merge
 
-Autonomous pipeline. Given a description or spec path, this skill plans, reviews the plan, implements TDD via subagents, opens a PR, iterates multi-review until clean, and cleans up. No iteration cap — the loops run until their stop conditions are met.
+Autonomous pipeline. Given a description or spec path, this skill plans, reviews the plan, implements TDD via subagents, opens a PR, iterates multi-review until clean, gates the merge on a green CI run, and cleans up. No iteration cap — the loops run until their stop conditions are met.
+
+**Merge gate.** The PR merges only when *both* hold: the multi-review loop reports no pre-fix criticals (step 5) **and** CI is green on the PR head (step 6). These are independent — a clean AI review is not a passing build, and the multi-review loop pushes its per-round fixes without ever watching the remote checks.
 
 ## Argument handling
 
@@ -205,10 +207,63 @@ Anti-rule: never dispatch round N+1 solely to confirm the fixes from round N lan
 
 If codex is unavailable on a given round, do not change the stop threshold here (unlike step 2) — multi-review's two claude reviewers are still authoritative for the critical check.
 
-## Step 6 — Cleanup
+## Step 6 — CI gate
 
-Invoke the `cleanup` skill. It will merge the PR, delete the branch, sweep stale branches, and drain `SESSION.md`.
+**The PR does not merge until CI is green.** This is the second merge gate, independent of step 5: the multi-review loop trusts its own fixes and never watches the remote build, so a clean review can still sit on top of a red pipeline. Before handing off to cleanup, confirm the PR's head commit passes all required checks — and if it doesn't, fix it, the same way the earlier loops fix what their reviewers find.
+
+**Stop rule:** Exit when all checks on the current PR head report success. If the repo has no checks at all, see "No CI configured" below.
+
+Per round:
+
+1. **Wait for CI on the latest head.** `gh` is unsandboxable — run it with `dangerouslyDisableSandbox: true`, never chained with other commands, capturing output to a file. Use:
+
+   ```
+   gh pr checks <num> --watch --interval 30
+   ```
+
+   `--watch` blocks until every check finishes, then exits 0 if all succeeded and non-zero if any failed or were cancelled. CI can take many minutes, so run the watch in the background (or with a generous timeout) rather than blocking the turn. Capture both the exit code and the listing (each check's state plus a details URL).
+
+2. **Interpret the result:**
+   - Exit 0 / every check `pass` → the gate is satisfied. Proceed to step 7 (cleanup).
+   - Any check `fail` / `cancelled` / `timed_out` → CI is red. Dispatch the fix subagent below.
+   - Checks still `pending` after `--watch` returns (rare — e.g. a required check that never reported) → treat as red and investigate the same way.
+
+3. **Fix the failure (fresh subagent).** Dispatch a subagent whose sole job is to turn CI green:
+
+   ```
+   Round N — fix red CI on PR #<num>
+
+   CI is failing. Identify and fix the cause so all required checks pass.
+
+   1. List the failing checks and read their logs (gh is unsandboxable —
+      dangerouslyDisableSandbox, never chained, capture to files):
+        gh pr checks <num>                    (which checks failed + run URLs)
+        gh run view <run-id> --log-failed     (the failing job's log)
+   2. Reproduce locally where possible — run the same test / lint / build that the
+      failing job runs.
+   3. Fix the root cause, not the symptom. When the failure is a behavioral bug or a
+      failing/flaky test, follow `superpowers:test-driven-development`: reproduce the
+      failure locally first, fix, then watch it go green. For pure build/lint/format/
+      config failures with no unit-testable surface, fix directly and note in the commit
+      message why no test was added.
+   4. Obey the comment-hygiene directive from step 3 — never introduce task/PR/wave/plan
+      labels into code or doc comments.
+   5. Commit with a clear semantic message. Do NOT push — the orchestrator pushes.
+
+   Report back: the failing checks, the root cause, exactly what you changed, and whether
+   the fix is a trivial infra/lint/flake/config change or a substantive behavioral change.
+   ```
+
+4. **After the subagent returns**, the orchestrator pushes (`git push`) and returns to the top of this loop (the CI watch) to re-check CI on the new head.
+
+5. **Re-review substantive fixes.** If the fix subagent reported a *substantive behavioral change* (anything beyond a lint/format/flake/config/infra fix), re-enter the step 5 multi-review loop for one round scoped to just those changes before re-checking CI — a change large enough to alter behavior must also clear the no-criticals gate, or the two gates fall out of sync. Trivial infra fixes skip this and go straight back to the CI watch.
+
+**No CI configured.** If `gh pr checks <num>` reports no checks for the head commit, there is no build to gate on. Log one line — `CI gate skipped: no checks reported for <sha>` — and proceed to step 7. Do not block waiting for checks that will never appear.
+
+## Step 7 — Cleanup
+
+Invoke the `cleanup` skill. It will merge the PR, delete the branch, sweep stale branches, and drain `SESSION.md`. By the time this runs, both merge-gate conditions (step 5 no-criticals, step 6 green CI) are satisfied.
 
 ## Reporting
 
-End-of-turn summary (one or two sentences): the merged PR number, the branch, the number of plan-review and multi-review rounds, and the path to `tmp/review-comparison.md`.
+End-of-turn summary (one or two sentences): the merged PR number, the branch, the number of plan-review, multi-review, and CI-fix rounds, explicit confirmation that CI was green at merge, and the path to `tmp/review-comparison.md`.
