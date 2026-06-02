@@ -26,7 +26,7 @@ Split `/multi-review`'s trailing text into three buckets:
 
 - **Target hints** — phrases that explicitly identify what to review (see table below).
 - **Control flags** — recognized control tokens that change skill behavior, not forwarded as focus text. Currently one is recognized:
-  - `--auto-apply` — skip the interactive "Apply these fixes now?" prompt in Step 5 and proceed straight to Step 6 (apply fixes). Use this when invoking `/multi-review` from another skill or subagent where no human is present to answer. The evaluation is still written in Step 8.
+  - `--auto-apply` — run non-interactively, for programmatic callers (another skill or subagent where no human is present to answer prompts). It skips **every** interactive prompt this skill would otherwise raise: (1) the Step 5 "Apply these fixes now?" prompt — proceed straight to Step 6 (apply fixes); and (2) the Step 2 collision prompt — overwrite any existing output files for the slug instead of asking. The evaluation is still written in Step 8.
 - **Focus text** — everything that doesn't match a target hint or control flag; forwarded verbatim to the claude reviewer (custom-review) as additional focus. Codex is not given focus text — it runs as a plain `/review` with only the target flags.
 
 Parse control flags by splitting the trailing text on whitespace and removing any token that matches a recognized flag (`--auto-apply`) before computing target hints and focus text. Record the set of flags encountered for later steps.
@@ -112,7 +112,10 @@ Plus per-reviewer status sidecars (see Step 3):
 - `tmp/multi-review/codex-<slug>.status.json`
 - `tmp/multi-review/custom-review-<slug>.status.json`
 
-**Collision check.** Before running anything, check if any of these files already exist. If yes: warn the operator listing which files exist, and ask via `AskUserQuestion` whether to overwrite. Exit on "no".
+**Collision check.** Before running anything, check if any of these files already exist.
+
+- **Interactive (no `--auto-apply`):** if any exist, warn the operator listing which files exist, and ask via `AskUserQuestion` whether to overwrite. Exit on "no".
+- **`--auto-apply` passed:** do **not** prompt — there is no human to answer, and a prompt here would stall an autonomous multi-round loop. The slug is stable across rounds (`pr<N>`, or `branch-<name>-<hash>` hashed from the branch *name*, not the diff), so round 2+ always collides with round 1's files. Overwrite the existing outputs, printing a one-line notice naming the slug being overwritten.
 
 Then `mkdir -p tmp/multi-review/`.
 
@@ -337,8 +340,8 @@ Do not re-print the evaluation in full — the operator can read the file.
 | PR head OID ≠ local HEAD OID | Abort with the appropriate fetch / push / rebase guidance for ahead / behind / diverged |
 | PR target with dirty worktree | Abort; tell operator to commit, stash, or discard first |
 | Target has no diff | Refuse |
-| Output files already exist for this slug | `AskUserQuestion` overwrite y/n; exit on no |
+| Output files already exist for this slug | Interactive: `AskUserQuestion` overwrite y/n, exit on no. `--auto-apply`: overwrite with a one-line notice, no prompt. |
 | One reviewer fails / empty / times out | Write `FAILED:` placeholder + status sidecar; continue with the other |
 | Both reviewers fail | Print the two reasons and exit before merging |
 | Operator declines to fix | Skip Steps 6–7; still write evaluation with fix-grounded fields marked `not assessed` |
-| `--auto-apply` passed in args | Skip the Step 5 prompt; apply all merged findings automatically; evaluation still written |
+| `--auto-apply` passed in args | Skip the Step 2 collision prompt (overwrite) and the Step 5 apply prompt; apply all merged findings automatically; evaluation still written |
