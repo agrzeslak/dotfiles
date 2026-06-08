@@ -144,6 +144,9 @@ limit_label() {
 # for the workspace directory.  The warning marker fires on large churn so a
 # branch carrying a lot of uncommitted change is visible at a glance.
 DIR=$(echo "$input" | jq -r '.workspace.current_dir // empty')
+# The harness reports the active linked-worktree name here (absent for the main
+# checkout); the branch-icon logic below keys off it.
+WORKTREE=$(echo "$input" | jq -r '.workspace.git_worktree // empty')
 BRANCH=""
 GIT_STATUS=""
 BRANCH_ICON=""
@@ -152,23 +155,25 @@ if [ -n "$DIR" ] && git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1; then
 
   # Branch icon, doubling as a worktree indicator.  We always prefix the branch
   # with a glyph: the plain branch symbol "⎇" for an ordinary checkout, swapped
-  # to "🌳" when the agent is inside a linked worktree.
+  # to "🌳" when the session's working directory is a linked worktree.
   #
-  # A linked worktree keeps its per-worktree gitdir under
-  # "<common>/worktrees/<name>", so its resolved git-dir differs from the repo's
-  # common git-dir; in the main checkout the two are identical.  Both paths are
-  # forced absolute so the comparison isn't fooled by one side being relative
-  # (".git").  If --path-format is unsupported the common dir comes back empty
-  # and we fall through to the plain branch icon rather than mismarking every
-  # checkout as a worktree.
+  # The worktree state comes straight from the harness's `workspace.git_worktree`
+  # field (parsed into $WORKTREE above) rather than being re-derived with `git
+  # rev-parse`.  That field is the harness's own signal — the worktree name, or
+  # absent for the main checkout — and it tracks the session's live cwd, so it
+  # follows a mid-session `cd` into a worktree.  Reading it also saves two git
+  # invocations per render; older Claude Code builds that don't emit the field
+  # just fall through to the plain branch icon.
   #
-  # NOTE: the icon rides on the branch name, so a detached HEAD (empty branch)
-  # shows nothing — acceptable since the branch segment is hidden there.
-  BRANCH_ICON="⎇ "
-  GIT_DIR_ABS=$(git -C "$DIR" rev-parse --absolute-git-dir 2>/dev/null)
-  GIT_COMMON_ABS=$(git -C "$DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
-  if [ -n "$GIT_DIR_ABS" ] && [ -n "$GIT_COMMON_ABS" ] && [ "$GIT_DIR_ABS" != "$GIT_COMMON_ABS" ]; then
+  # NOTE: this reflects the *session's* cwd.  Worktree work that never moves the
+  # shell — `git -C <worktree> …`, or a subagent operating in its own worktree —
+  # leaves current_dir at the project root, so the main statusline still shows ⎇.
+  # The icon also rides on the branch name, so a detached HEAD (empty branch)
+  # shows nothing, since the branch segment is hidden there anyway.
+  if [ -n "$WORKTREE" ]; then
     BRANCH_ICON="🌳 "
+  else
+    BRANCH_ICON="⎇ "
   fi
 
   ADDED=0
