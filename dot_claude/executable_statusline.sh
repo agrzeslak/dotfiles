@@ -146,8 +146,30 @@ limit_label() {
 DIR=$(echo "$input" | jq -r '.workspace.current_dir // empty')
 BRANCH=""
 GIT_STATUS=""
+BRANCH_ICON=""
 if [ -n "$DIR" ] && git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1; then
   BRANCH=$(git -C "$DIR" branch --show-current 2>/dev/null)
+
+  # Branch icon, doubling as a worktree indicator.  We always prefix the branch
+  # with a glyph: the plain branch symbol "⎇" for an ordinary checkout, swapped
+  # to "🌳" when the agent is inside a linked worktree.
+  #
+  # A linked worktree keeps its per-worktree gitdir under
+  # "<common>/worktrees/<name>", so its resolved git-dir differs from the repo's
+  # common git-dir; in the main checkout the two are identical.  Both paths are
+  # forced absolute so the comparison isn't fooled by one side being relative
+  # (".git").  If --path-format is unsupported the common dir comes back empty
+  # and we fall through to the plain branch icon rather than mismarking every
+  # checkout as a worktree.
+  #
+  # NOTE: the icon rides on the branch name, so a detached HEAD (empty branch)
+  # shows nothing — acceptable since the branch segment is hidden there.
+  BRANCH_ICON="⎇ "
+  GIT_DIR_ABS=$(git -C "$DIR" rev-parse --absolute-git-dir 2>/dev/null)
+  GIT_COMMON_ABS=$(git -C "$DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+  if [ -n "$GIT_DIR_ABS" ] && [ -n "$GIT_COMMON_ABS" ] && [ "$GIT_DIR_ABS" != "$GIT_COMMON_ABS" ]; then
+    BRANCH_ICON="🌳 "
+  fi
 
   ADDED=0
   REMOVED=0
@@ -241,7 +263,7 @@ fi
 # --- Single-line layout ------------------------------------------------------
 # <model> · branch · git_status · ctx N% · 5h N% bar · 7d N% bar · peak/off-peak [· ↻N% if low]
 OUT="$MODEL"
-[ -n "$BRANCH"     ] && OUT="$OUT · $BRANCH"
+[ -n "$BRANCH"     ] && OUT="$OUT · ${BRANCH_ICON}$BRANCH"
 [ -n "$GIT_STATUS" ] && OUT="$OUT · $GIT_STATUS"
 [ -n "$CTX"        ] && OUT="$OUT · $(colorize "ctx $(printf '%.0f' "$CTX")%" "$CTX")"
 [ -n "$FIVE_H" ] && OUT="$OUT · $(limit_label "5h" "$FIVE_H" "$FIVE_H_RESET" 18000)"
