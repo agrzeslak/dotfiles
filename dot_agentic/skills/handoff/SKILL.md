@@ -7,7 +7,7 @@ description: Compact the current conversation into a self-contained prompt that 
 
 ## What this skill does
 
-Compact this conversation into the minimum payload a **fresh Claude Code session in the same project** needs to start executing a specific task without rediscovery. Output is a single fenced block the user copies and pastes as the first message of the new session.
+Compact this conversation into the minimum payload a **fresh Claude Code session in the same project** needs to start executing a specific task without rediscovery. **Your entire response is the handoff itself, raw** — the user runs `/copy` to copy your whole message verbatim and pastes it as the first message of the new session.
 
 The receiver has filesystem and tool access but **zero conversation context**.
 
@@ -63,9 +63,13 @@ Run these steps before writing the handoff. Skip a step only when the conversati
 
 ## Output
 
-Emit one fenced markdown block. The user copies it as the first message of the new session. Do **not** include preamble outside the block — anything outside is wasted.
+**Your entire response is the handoff and nothing else.** The user runs `/copy` to copy your whole message verbatim into the next session, so anything that isn't the handoff becomes noise there.
 
-Template:
+- **No code fence around it.** Emit the handoff as raw markdown, not wrapped in a ```` ``` ```` block — stray backticks get copied too.
+- **No preamble.** Your message starts at `## Task`. No "Here's the handoff:", no summary of what you did.
+- **No trailing prose.** Your message ends at the last line of handoff content. No "Let me know if you'd like changes", no follow-up questions, no offer to refine.
+
+The template below is shown inside a fence **only to delimit it on this page**. Do not reproduce the fence — emit its contents as your raw message.
 
 ````markdown
 ## Task
