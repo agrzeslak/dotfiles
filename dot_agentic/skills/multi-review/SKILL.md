@@ -1,13 +1,15 @@
 ---
 name: multi-review
-description: Run two independent reviewers in parallel (codex `/review` and claude `/custom-review`) against the same target, save verbatim outputs to `tmp/multi-review/`, synthesize a merged best-of review, optionally apply the fixes, then write an A/B evaluation comparing the two reviewers on accuracy, signal-to-noise, and depth. The evaluation is the point — it powers iterative improvement of the review skills. Codex runs as a plain `/review` with only the target; non-target trailing text after `/multi-review` is forwarded verbatim to the claude reviewer as additional focus.
+description: Review a target with claude `/custom-review` always, plus codex `/review` when the change is significant enough to justify codex's limited budget. By default multi-review auto-decides whether to run codex from the change's significance and the review round; the caller can force it with `--codex` / `--no-codex`. Saves verbatim reviewer outputs to `tmp/multi-review/`, synthesizes a merged best-of review, optionally applies the fixes, and — only when codex also ran — writes an A/B evaluation comparing the two reviewers on accuracy, signal-to-noise, and depth (this powers iterative improvement of the review skills). Codex runs as a plain `/review` with only the target; non-target trailing text after `/multi-review` is forwarded verbatim to the claude reviewer as additional focus.
 ---
 
 # Multi Review
 
 ## Purpose
 
-`/multi-review` runs two independent code reviews of the same target in parallel — codex `/review` and claude `/custom-review` — and synthesizes a merged best-of review. After applying the fixes, the skill writes an evaluation of the two reviewers so the user can A/B-test the review skills and improve them over time.
+`/multi-review` reviews a target with claude `/custom-review` — always — and, **when warranted**, codex `/review` alongside it, then synthesizes a merged best-of review. When both reviewers ran, the skill also writes an evaluation comparing them so the user can A/B-test the review skills and improve them over time.
+
+**Codex is selective by design.** Codex is the higher-signal reviewer — it routinely catches issues the others miss — but its usage budget is far lower and is easily exhausted. So codex runs only when the change is worth that budget: a fundamental/critical change with far-reaching effects, or one with enough technical subtlety to be easy to get wrong. It should *not* burn budget on mechanical, doc, config, or UI changes, or on routine re-review rounds where a slip is low-stakes. That decision is made by the **codex gate** in Step 2.5 — auto-decided by default, or forced by the caller with `--codex` / `--no-codex`. The 99% path is an agent invoking `/multi-review` and letting the gate decide; centralizing the logic here (rather than in every caller) is deliberate, so it can be tuned in one place.
 
 Key difference from `/codex-review`: this skill is **invoked fresh** (not after a prior `/review`). The target must be determined from `/multi-review` arguments, not from earlier conversation context.
 
@@ -16,7 +18,7 @@ Key difference from `/codex-review`: this skill is **invoked fresh** (not after 
 Refuse with a clear, short message if any fail:
 
 1. **Working directory is inside a git repository.** Both reviewers operate on a working tree.
-2. **`codex` is on `PATH`.** Run `command -v codex`. If missing, tell the operator to install codex.
+2. **`codex` is on `PATH`** — *only required when codex will actually run.* Run `command -v codex`. If missing: when the caller passed `--codex` (an explicit request for codex), refuse and tell the operator to install codex; otherwise do **not** refuse — record that codex is unavailable and let the codex gate (Step 2.5) force `run_codex = false` with a note. The skill stays useful with `custom-review` alone.
 3. **The `custom-review` skill is available.** If it is missing from the available-skills list, refuse.
 4. **`gh` is on `PATH` and authenticated** — *only* if the target is `pr`. Run `command -v gh` and `gh auth status`. If either fails, refuse with the missing piece.
 
@@ -25,11 +27,14 @@ Refuse with a clear, short message if any fail:
 Split `/multi-review`'s trailing text into three buckets:
 
 - **Target hints** — phrases that explicitly identify what to review (see table below).
-- **Control flags** — recognized control tokens that change skill behavior, not forwarded as focus text. Currently one is recognized:
-  - `--auto-apply` — run non-interactively, for programmatic callers (another skill or subagent where no human is present to answer prompts). It skips **every** interactive prompt this skill would otherwise raise: (1) the Step 5 "Apply these fixes now?" prompt — proceed straight to Step 6 (apply fixes); and (2) the Step 2 collision prompt — overwrite any existing output files for the slug instead of asking. The evaluation is still written in Step 8.
-- **Focus text** — everything that doesn't match a target hint or control flag; forwarded verbatim to the claude reviewer (custom-review) as additional focus. Codex is not given focus text — it runs as a plain `/review` with only the target flags.
+- **Control flags** — recognized control tokens that change skill behavior, not forwarded as focus text. Recognized:
+  - `--auto-apply` — run non-interactively, for programmatic callers (another skill or subagent where no human is present to answer prompts). It skips **every** interactive prompt this skill would otherwise raise: (1) the Step 5 "Apply these fixes now?" prompt — proceed straight to Step 6 (apply fixes); and (2) the Step 2 collision prompt — overwrite any existing output files for the slug instead of asking. The evaluation is still written in Step 8 (if codex ran). **`--auto-apply` does not influence the codex gate** — it governs prompts only, not whether codex runs.
+  - `--codex` — force codex to run regardless of the Step 2.5 auto-decision. Use when the caller has already judged the change worth codex's budget.
+  - `--no-codex` — force codex to be skipped regardless of the auto-decision. `custom-review` still runs.
+  - Passing both `--codex` and `--no-codex` is contradictory — refuse with a one-line message.
+- **Focus text** — everything that doesn't match a target hint or control flag; forwarded verbatim to the claude reviewer (custom-review) as additional focus. Codex is not given focus text — it runs as a plain `/review` with only the target flags. (Focus text still informs the codex gate's read of the change — see Step 2.5.)
 
-Parse control flags by splitting the trailing text on whitespace and removing any token that matches a recognized flag (`--auto-apply`) before computing target hints and focus text. Record the set of flags encountered for later steps.
+Parse control flags by splitting the trailing text on whitespace and removing any token that matches a recognized flag (`--auto-apply`, `--codex`, `--no-codex`) before computing target hints and focus text. Record the set of flags encountered for later steps.
 
 Target heuristics (parse from args; default to uncommitted):
 
@@ -119,11 +124,51 @@ Plus per-reviewer status sidecars (see Step 3):
 
 Then `mkdir -p tmp/multi-review/`.
 
-## Step 3 — Spawn both reviewers in parallel
+## Step 2.5 — Codex gate: decide whether codex runs
 
-Both start in a **single message** with two tool calls so they run concurrently.
+`custom-review` always runs. This step decides a single boolean, `run_codex`, that governs whether codex `/review` runs alongside it. Resolve it in **precedence order** — the first matching rule wins:
 
-### Reviewer A — codex (background Bash)
+1. **Explicit override (caller's conscious decision).**
+   - `--codex` → `run_codex = true`.
+   - `--no-codex` → `run_codex = false`.
+   - (Both flags together were already refused in Step 1.)
+
+   An explicit flag is honored verbatim — do **not** second-guess it with the auto-decision. This is the escape hatch for a caller who has already made the judgment.
+
+2. **Auto-decision (no explicit flag — the 99% path).** Take a quick look at *what is actually being reviewed* and *which round this is*, then decide. The two gates compose: the round gate runs first and can short-circuit to skip; the change-nature gate decides the rest.
+
+   **(a) Round gate.** Determine the round from whether prior output artifacts for this slug already exist in `tmp/multi-review/` (you already learned this in the Step 2 collision check):
+   - **Round 1** (no prior artifacts) → fall through to the change-nature gate (b).
+   - **Round ≥ 2** (prior artifacts exist) → **default `run_codex = false`.** A follow-up pass after fixes is usually lower-stakes, and codex makes less and less sense each round. Re-enable codex (`true`) only if **either**:
+     - the **prior round surfaced a critical/blocking finding** — read the prior `merged-<slug>.md` (and `codex-<slug>.md` if present); if it contained ≥1 blocking-severity finding, trust is eroded enough to keep codex in the loop; **or**
+     - the **current change is itself high-risk/subtle** by the change-nature gate (b) — a fix that is easy to get wrong justifies another codex pass even on a re-review.
+
+     Otherwise stay skipped. (Round detection is best-effort: the `uncommitted` slug embeds a diff hash, so back-to-back uncommitted runs each look like round 1 — that errs toward *including* codex, which is the safe direction. `branch`/`pr`/`commit` slugs are stable across rounds and detect re-review correctly.)
+
+   **(b) Change-nature gate.** Look at the actual diff — paths, content, and breadth (use the diff you already have from the empty-diff preflight, or a fresh `git diff --stat` plus a skim of the substantive hunks):
+   - **Lean skip** — the diff is dominated by low-stakes change where a slip is cheap: docs / markdown / comments, formatting / lint-only, pure renames, config / lockfile / dependency bumps, generated code, mechanical test churn, or isolated UI / styling.
+   - **Lean include** — the diff touches subtle or far-reaching surface: core engine / protocol / parsing logic, security / auth / crypto, concurrency / async-cancellation / ordering / locking, data flow across layers (producer → storage → transport → render), state machines, error / edge-case handling, or a wide blast radius (many subsystems, or many files of real logic). Operator focus text that flags subtlety or "easy to get wrong" is itself a strong include signal.
+   - **Borderline** (genuinely mixed or unclear) → resolve by round: **round 1 → include** (cheap insurance on the first look), **round ≥ 2 → skip** (we already had a pass). This asymmetry is intentional.
+
+3. **Availability cap.** After the rules above, if `run_codex` is `true` but `codex` is not on `PATH` (precondition 2), force `run_codex = false` and note "codex unavailable on PATH". (An explicit `--codex` with codex absent already refused in precondition 2, so this cap only ever silently downgrades an *auto* decision.)
+
+**Announce the decision.** Print exactly one line so every gate decision is auditable and the heuristic stays tunable from the evaluation data:
+
+```
+codex: <included|skipped> — round <N>, <one-clause reason>
+```
+
+Examples: `codex: skipped — round 1, docs/markdown-only diff`; `codex: included — round 1, touches engine proxy + async cancellation`; `codex: skipped — round 2, prior round had 0 blocking findings`; `codex: included — round 2, prior round had blocking findings (trust check)`; `codex: included — forced by --codex`.
+
+Carry `run_codex` (and the announced reason) into the steps below.
+
+## Step 3 — Spawn the enabled reviewers
+
+If `run_codex` is true, both reviewers start in a **single message** with two tool calls so they run concurrently. If `run_codex` is false, **skip Reviewer A entirely** and spawn only Reviewer B (the foreground `custom-review` Agent) — there is no codex Bash call, no `codex-<slug>.*` files, and no background process to monitor.
+
+### Reviewer A — codex (background Bash) — *only if `run_codex` is true*
+
+Skip this entire subsection when the Step 2.5 gate set `run_codex = false`.
 
 Run a plain `codex review` with only the target flags — **no custom prompt, no AGENTS.md preamble, no focus text**. Codex sees the same invocation it would see from a bare `/review` against this target. Flags by target:
 
@@ -172,11 +217,13 @@ Sample prompt (fill in concrete values):
 
 ### Why one Bash + one Agent in one message
 
-Both are independent; issuing them in a single message starts them in parallel. Codex runs in background because its 10-min timeout is longer than the Agent typically takes; the custom-review Agent is foreground (its result returns when complete). After this message, monitor for the background codex completion before proceeding.
+(Applies when `run_codex` is true.) Both are independent; issuing them in a single message starts them in parallel. Codex runs in background because its 10-min timeout is longer than the Agent typically takes; the custom-review Agent is foreground (its result returns when complete). After this message, monitor for the background codex completion before proceeding.
+
+When `run_codex` is false there is only the foreground custom-review Agent — issue it alone and wait for its result; there is no background process to monitor.
 
 ## Step 3.5 — Collect outputs into the canonical paths
 
-After both reviewers finish, normalize their outputs so Step 4 can read predictable paths.
+After the enabled reviewer(s) finish, normalize their outputs so Step 4 can read predictable paths.
 
 **Reviewer B (`custom-review`):**
 
@@ -190,13 +237,21 @@ After both reviewers finish, normalize their outputs so Step 4 can read predicta
 
 **Post-write sanity check.** Before proceeding to Step 4, confirm that `tmp/multi-review/custom-review-<slug>.md` and (if codex ran) `tmp/multi-review/codex-<slug>.md` exist as distinct files.
 
-For codex (Reviewer A): the status sidecar was already written by the bash command. If `exit != 0` or the output file is empty (`stat -c %s ... -eq 0`), update its status to `"ok":false` and leave the output file as-is (codex's own error messages are useful evidence).
+For codex (Reviewer A):
 
-**Abort condition.** If both reviewers report failure, print the two reasons and stop before merging. Otherwise proceed — a single successful review still produces a useful merged review and evaluation.
+- **Gate-skipped (`run_codex = false`):** no codex output or sidecar was produced. Write a sidecar that records the *skip* (distinct from a failure) so later steps can tell them apart:
+  ```json
+  {"reviewer":"codex","ok":false,"skipped":true,"reason":"codex gate: <reason from Step 2.5>"}
+  ```
+- **Ran (`run_codex = true`):** the status sidecar was already written by the bash command. If `exit != 0` or the output file is empty (`stat -c %s ... -eq 0`), update its status to `"ok":false` (a genuine failure, not a skip) and leave the output file as-is (codex's own error messages are useful evidence).
+
+**Abort condition.** Abort only when **no reviewer produced a usable review** — i.e. custom-review failed *and* codex either failed or was gate-skipped. In that case print the reason(s) and stop before merging. A gate-skipped codex is **not** a failure: with custom-review successful, proceed normally on the single review.
 
 ## Step 4 — Synthesize merged review
 
-`Read` each of the two `tmp/multi-review/*-<slug>.md` outputs (skip either whose status sidecar is `"ok":false`). Produce **one** merged review and write it to `tmp/multi-review/merged-<slug>.md`.
+`Read` each available `tmp/multi-review/*-<slug>.md` output (skip any whose status sidecar is `"ok":false` — this includes a gate-skipped codex). Produce **one** merged review and write it to `tmp/multi-review/merged-<slug>.md`.
+
+**Single-reviewer case (codex skipped or failed):** only custom-review's output is available. The merge degrades to a pass-through — still apply synthesis rule 2 (re-read each finding's cited code and keep only those you now believe are real), still group by severity, still single-voice. The consensus rule (1) is moot with one reviewer. A merged review is still produced because Step 6 applies fixes from it.
 
 Synthesis rules (same as `codex-review` Step 5):
 
@@ -206,25 +261,25 @@ Synthesis rules (same as `codex-review` Step 5):
 4. **Voice** — single unified reviewer voice. No "codex said X / custom-review said Y" attribution in the body.
 5. **Structure** — group by severity (blocking → medium → optional). File:line references on every finding.
 
-Also write `tmp/multi-review/provenance-<slug>.md` capturing, per finding (kept or dropped):
+**Only when codex ran** (`run_codex` was true and codex produced a usable review), also write `tmp/multi-review/provenance-<slug>.md` capturing, per finding (kept or dropped):
 
 - Which reviewer(s) raised it.
 - Kept / dropped / merged decision and one-line reason.
 
-The evaluation step uses this directly; never lose it to in-memory state.
+The evaluation step (Step 8) uses this directly; never lose it to in-memory state. When codex was skipped there is no A/B comparison to write, so the evaluation and its provenance are skipped entirely (see Step 8) — do **not** produce a provenance file in that case.
 
 ## Step 5 — Print merged review and ask to fix
 
 Print the full contents of `merged-<slug>.md` inline in the chat.
 
-**If `--auto-apply` was passed in the args**, skip the prompt entirely: set `fixes_applied=true`, print a one-line notice ("auto-apply: applying all merged findings without prompting"), and proceed to Step 6. The evaluation in Step 8 is still written.
+**If `--auto-apply` was passed in the args**, skip the prompt entirely: set `fixes_applied=true`, print a one-line notice ("auto-apply: applying all merged findings without prompting"), and proceed to Step 6. The evaluation in Step 8 is still written *if codex ran*.
 
 Otherwise, call `AskUserQuestion` with a yes/no:
 
 - **Question:** "Apply these fixes now?"
-- **Options:** "Yes — apply all merged findings" / "No — skip fixes (evaluation still written)"
+- **Options:** "Yes — apply all merged findings" / "No — skip fixes (evaluation still written if codex ran)"
 
-Regardless of the answer, an evaluation will be written in Step 8. The fix experience supplies grounded judgments; without it, evaluation fields that depend on fix evidence are explicitly marked `not assessed (fixes declined)` rather than guessed.
+Regardless of the answer, an evaluation will be written in Step 8 *if codex ran* (skipped otherwise — see Step 8). The fix experience supplies grounded judgments; without it, evaluation fields that depend on fix evidence are explicitly marked `not assessed (fixes declined)` rather than guessed.
 
 If "no": skip Steps 6 and 7, jump to Step 8 with the `fixes_applied=false` flag.
 
@@ -258,9 +313,11 @@ If the project has no obvious quick check, or the check would take more than ~2 
 
 Do **not** block the evaluation on a green check — the evaluation is about reviewer quality, not the final state of the code.
 
-## Step 8 — Write evaluation
+## Step 8 — Write evaluation (only when codex ran)
 
-Write to `tmp/multi-review/evaluation-<slug>.md`. Always written — even when fixes were declined. Fix-grounded fields without evidence are explicitly marked `not assessed (fixes declined)`; do not guess.
+**Skip this entire step when codex did not run** (gate-skipped via Step 2.5, forced off with `--no-codex`, or failed). The evaluation is an **A/B comparison** of two reviewers — with only `custom-review`, there is nothing to compare, no signal to tune the skills on, and no provenance file was written. In that case do not write `evaluation-<slug>.md`; instead print a one-line note: `evaluation: skipped — only custom-review ran (no A/B comparison)`. Steps 5–7 (merge, apply, verify) still happened, so the fixes are real; only the comparison artifact is omitted.
+
+Otherwise (codex ran), write to `tmp/multi-review/evaluation-<slug>.md`. Always written when codex ran — even when fixes were declined. Fix-grounded fields without evidence are explicitly marked `not assessed (fixes declined)`; do not guess.
 
 Required sections:
 
@@ -318,20 +375,21 @@ Rules:
 
 This surfaces credit/attribution for OQs that a peer reviewer's Finding (or codex's fix-driving framing) defended against — critical for the cumulative dataset's understanding of which OQ → fix paths are real signal. See `/home/andrzej/.agentic/tmp/cr2-iteration/multi-review-followup-D3.md` for the original rationale (PR #139 R1 OQ1 → codex F1 chain).
 
-After writing the evaluation, print only a short summary to the operator:
+When codex ran and the evaluation was written, print only a short summary to the operator:
 
 - Path to the evaluation file.
 - One-line "ranked best → worst" verdict.
 - The top 1–2 skill-improvement hypotheses, verbatim from section 5.
 
-Do not re-print the evaluation in full — the operator can read the file.
+Do not re-print the evaluation in full — the operator can read the file. (In the codex-skipped case, the one-line `evaluation: skipped …` note above is the whole summary.)
 
 ## Failure modes — quick reference
 
 | Failure | Action |
 |---|---|
 | Not inside a git repo | Refuse |
-| `codex` not on `PATH` | Refuse |
+| `codex` not on `PATH`, `--codex` passed | Refuse (explicit codex request can't be honored) |
+| `codex` not on `PATH`, no `--codex` | Proceed; codex gate forces `run_codex=false` with a note |
 | `custom-review` skill missing | Refuse |
 | `gh` missing or unauthenticated (PR target only) | Refuse with the specific missing piece |
 | Args use rejected shorthand (`branch X`, `staged`) | Refuse with the corrected form |
@@ -341,7 +399,13 @@ Do not re-print the evaluation in full — the operator can read the file.
 | PR target with dirty worktree | Abort; tell operator to commit, stash, or discard first |
 | Target has no diff | Refuse |
 | Output files already exist for this slug | Interactive: `AskUserQuestion` overwrite y/n, exit on no. `--auto-apply`: overwrite with a one-line notice, no prompt. |
-| One reviewer fails / empty / times out | Write `FAILED:` placeholder + status sidecar; continue with the other |
-| Both reviewers fail | Print the two reasons and exit before merging |
-| Operator declines to fix | Skip Steps 6–7; still write evaluation with fix-grounded fields marked `not assessed` |
-| `--auto-apply` passed in args | Skip the Step 2 collision prompt (overwrite) and the Step 5 apply prompt; apply all merged findings automatically; evaluation still written |
+| Both `--codex` and `--no-codex` passed | Refuse — contradictory |
+| `--codex` passed | Codex gate forced on; codex runs (refuse earlier if codex absent) |
+| `--no-codex` passed | Codex gate forced off; custom-review only; no evaluation |
+| No codex flag (auto-decide) | Step 2.5 gate decides from change-nature + round; announce the one-line decision |
+| Codex gate-skipped (auto or `--no-codex`) | Single-reviewer merge; **no evaluation / provenance**; print `evaluation: skipped` note |
+| Codex ran but fails / empty / times out | Mark sidecar `ok:false` (genuine failure); continue on custom-review; treat as single-reviewer for the eval (skip eval — no comparison) |
+| custom-review fails, codex ran OK | Proceed on codex alone (single-reviewer merge); skip eval (no comparison) |
+| custom-review fails, codex skipped/failed | No usable review — print reason(s) and exit before merging |
+| Operator declines to fix | Skip Steps 6–7; still write evaluation (if codex ran) with fix-grounded fields marked `not assessed` |
+| `--auto-apply` passed in args | Skip the Step 2 collision prompt (overwrite) and the Step 5 apply prompt; apply all merged findings automatically. Does **not** affect the codex gate. Evaluation still written *if codex ran* |

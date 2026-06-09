@@ -25,7 +25,7 @@ Refuse with a clear short message if any fail:
 1. **Inside a git repository.**
 2. **`gh` is on `PATH` and authenticated.** Run `command -v gh`; capture `gh auth status` output to a file (gh is unsandboxable — never chain it with other commands; always invoke with `dangerouslyDisableSandbox: true`).
 3. **Required skills available:** `superpowers:brainstorming`, `superpowers:writing-plans`, `superpowers:test-driven-development`, `superpowers:subagent-driven-development`, `superpowers:verification-before-completion`, `plan-review-skill`, `multi-review`, `cleanup`. Check the available-skills list; refuse with the missing names if any are absent. Additionally, **if** the argument requests isolation (see "Branching" below), also require `superpowers:using-git-worktrees` and refuse if absent — checking now avoids failing mid-run after planning has already started.
-4. **`codex` is on `PATH`.** Run `command -v codex`. If missing, refuse — codex is required for the plan-review loop and the multi-review loop.
+4. **`codex` is on `PATH`.** Run `command -v codex`. If missing, refuse — codex is required for the plan-review loop (Step 2). In the multi-review loop (Step 4), codex is used *selectively*: multi-review's own codex gate auto-decides per round whether to spend codex's limited budget, so codex won't run every round — but it must still be installed so the gate can choose to use it.
 5. **`multi-review` supports `--auto-apply`.** This pipeline runs `/multi-review` inside a subagent loop where no human is present to answer its "Apply these fixes now?" prompt. Confirm the installed `multi-review/SKILL.md` documents an `--auto-apply` control flag (grep for `--auto-apply`); refuse if absent so the operator can update the skill before relying on an autonomous loop that would otherwise stall.
 
 ## Branching
@@ -108,7 +108,7 @@ After all tasks complete, run `superpowers:verification-before-completion` again
 
 **Precondition — clean tree.** The `against <base>` target diffs *committed* changes only (`git diff <base>...HEAD`). Before the first round, ensure all of Step 3's implementation is committed and the working tree is clean; otherwise the first round's diff is incomplete. Each round's subagent commits its own fixes (below), so the tree stays clean between rounds and every round sees the full, accurate branch-vs-base change.
 
-**Stop rule (read this first):** A round runs `/multi-review` (which itself runs both reviewers and applies fixes) and the subagent commits. Exit the loop as soon as a round's **pre-fix** critical count across both reviewers is 0. Do **not** dispatch a follow-up round to verify the fixes from the previous round — the fixes are trusted. The pre-fix critical count is the *only* gate; non-critical findings in a clean round are applied, committed, and then the loop ends without another review.
+**Stop rule (read this first):** A round runs `/multi-review` (which runs `custom-review` always, codex only when its codex gate decides the change warrants it, then applies fixes) and the subagent commits. Exit the loop as soon as a round's **pre-fix** critical count across whichever reviewers ran is 0. Do **not** dispatch a follow-up round to verify the fixes from the previous round — the fixes are trusted. The pre-fix critical count is the *only* gate; non-critical findings in a clean round are applied, committed, and then the loop ends without another review.
 
 Initialize `<repo root>/tmp/review-comparison.md` if it does not exist. The file is a running cumulative log designed to drive **improvements to the claude reviewer (`custom-review`)** specifically — each entry should be actionable for future skill edits (what custom-review missed that codex caught, what it over-flagged, where its depth fell short of or exceeded codex).
 
@@ -129,9 +129,11 @@ Per round:
    the entire branch diff. The focus text for round 1 is empty (full review); for round N>1,
    the focus text is "<short description of what changed since round N-1, with file paths>".
 
-   The /multi-review skill will save verbatim outputs from codex /review and /custom-review
-   under tmp/multi-review/. It will also synthesize a merged review and produce per-reviewer
-   A/B notes.
+   The /multi-review skill saves verbatim reviewer outputs under tmp/multi-review/, synthesizes
+   a merged review, and — only when codex also ran — produces per-reviewer A/B notes. Do NOT
+   pass --codex or --no-codex: let multi-review's codex gate auto-decide whether this change and
+   this round warrant codex's limited budget. codex may legitimately be skipped (e.g. a
+   doc/mechanical change, or a clean later round); that is expected, not a failure.
 
    Apply every finding regardless of severity. **Commit all fixes** with a clear semantic
    message and leave NO uncommitted changes — the next round diffs committed state only, so
@@ -159,15 +161,17 @@ Per round:
    to dispatch another round based on the pre-fix counts you report.
 
    Report back:
-     - Counts of findings by severity, per reviewer (codex, custom-review) — counted from the
-       *pre-fix* review output, before any fixes were applied.
-     - The pre-fix critical count across both reviewers (explicit number).
+     - Counts of findings by severity, per reviewer that ran (custom-review always; codex only
+       if the gate ran it) — counted from the *pre-fix* review output, before any fixes.
+     - The pre-fix critical count across whichever reviewers ran (explicit number).
      - For the comparison file: per-reviewer observations on accuracy (true vs false positives),
        depth (did they trace data flow / cite file:line / catch semantic gaps), and
        over/underrepresentation. Focus on what custom-review specifically did or missed
        compared to codex — this is the signal we want to amplify in the skill's future
        iterations.
-     - Whether codex was available this round.
+     - Whether codex ran this round. multi-review's codex gate may auto-skip it (or it may be
+       unavailable); if it did not run, report the one-line reason multi-review printed
+       (e.g. "skipped — round 2, prior round had 0 blocking findings").
    ```
 
 2. **After the subagent returns**, the orchestrator (this skill) does:
@@ -178,7 +182,7 @@ Per round:
      ## Round N — <ISO date>
 
      **Diff scope:** <files / focus text given to multi-review>
-     **Codex available:** yes | no
+     **Codex ran:** yes | no (if no: <gate reason, e.g. "auto-skipped — clean round 2" / "unavailable">)
 
      ### Per-reviewer scorecard
 
@@ -186,6 +190,9 @@ Per round:
      |---|---|---|---|---|
      | codex /review | … | … | … | … |
      | /custom-review | … | … | … | … |
+
+     (If codex was gate-skipped this round, fill its row with `skipped — <reason>` rather than
+     counts — the A/B comparison only exists on rounds where codex actually ran.)
 
      ### Actionable signal for custom-review improvement
 
@@ -204,7 +211,7 @@ Per round:
 
 Anti-rule: never dispatch round N+1 solely to confirm the fixes from round N landed cleanly. The next round only exists to surface new criticals; if round N's pre-fix already had none, there is nothing to confirm here.
 
-If codex is unavailable on a given round, do not change the stop threshold here (unlike step 2) — multi-review's claude reviewer (custom-review) is still authoritative for the critical check.
+If codex did not run on a given round — whether unavailable, or auto-skipped by multi-review's codex gate — do not change the stop threshold here (unlike step 2). multi-review's claude reviewer (custom-review) always runs and is authoritative for the critical check. A gate-skipped codex round is the gate judging the change low-stakes enough not to warrant codex's budget; trust that and gate on custom-review's pre-fix criticals as usual.
 
 ## Step 5 — Push and open PR
 
