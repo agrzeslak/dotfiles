@@ -7,7 +7,7 @@ description: Review a target with claude `/custom-review` always, plus codex `/r
 
 ## Purpose
 
-`/multi-review` reviews a target with claude `/custom-review` — always — and, **when warranted**, codex `/review` alongside it, then synthesizes a merged best-of review. When both reviewers ran, the skill also writes an evaluation comparing them so the user can A/B-test the review skills and improve them over time.
+`/multi-review` reviews a target with claude `/custom-review` — always — and, **when warranted**, codex `/review` alongside it, then synthesizes a merged best-of review. Every run emits a **gate verdict** — the pre-fix critical count, `pass` iff zero — which is the skill's primary machine-readable output and is computed from the merged review independent of whether codex ran (see Step 5). When both reviewers ran, the skill *additionally* writes an evaluation comparing them so the user can A/B-test the review skills and improve them over time. The gate is the verdict (always present); the evaluation is the codex-only analysis.
 
 **Codex is selective by design.** Codex is the higher-signal reviewer — it routinely catches issues the others miss — but its usage budget is far lower and is easily exhausted. So codex runs only when the change is worth that budget: a fundamental/critical change with far-reaching effects, or one with enough technical subtlety to be easy to get wrong. It should *not* burn budget on mechanical, doc, config, or UI changes, or on routine re-review rounds where a slip is low-stakes. That decision is made by the **codex gate** in Step 2.5 — auto-decided by default, or forced by the caller with `--codex` / `--no-codex`. The 99% path is an agent invoking `/multi-review` and letting the gate decide; centralizing the logic here (rather than in every caller) is deliberate, so it can be tuned in one place.
 
@@ -268,9 +268,23 @@ Synthesis rules (same as `codex-review` Step 5):
 
 The evaluation step (Step 8) uses this directly; never lose it to in-memory state. When codex was skipped there is no A/B comparison to write, so the evaluation and its provenance are skipped entirely (see Step 8) — do **not** produce a provenance file in that case.
 
-## Step 5 — Print merged review and ask to fix
+## Step 5 — Emit the gate verdict, print merged review, ask to fix
 
 Print the full contents of `merged-<slug>.md` inline in the chat.
+
+### Gate verdict (always emitted — codex-independent)
+
+The **gate** is the pre-fix critical count, and it is the skill's primary machine-readable output: callers such as `plan-implement-merge` loop on it (review → fix → re-review) until it reads zero. The merged review always groups findings by severity (blocking → medium → optional) and is produced *before* any fixes (Step 6), so its blocking section **is** the pre-fix critical set — whether or not codex ran. Count it from the merged review and print exactly one line:
+
+```
+gate: <pass|fail> — <N> pre-fix critical finding(s) [reviewers: <custom-review|custom-review+codex>]
+```
+
+`pass` iff `N == 0`. Treat any finding the merged review labels `blocking`, `critical`, or `P0` as critical (the merge groups under a `blocking` heading; the synonyms guard against drift). This line is emitted on **every** run — codex included, gate-skipped, or `--no-codex` — so the no-criticals gate never depends on codex having run. It is distinct from the Step 8 evaluation (an A/B comparison that *is* codex-only); the gate is the verdict, the evaluation is the analysis.
+
+Examples: `gate: pass — 0 pre-fix critical finding(s) [reviewers: custom-review]`; `gate: fail — 2 pre-fix critical finding(s) [reviewers: custom-review+codex]`.
+
+### Apply prompt
 
 **If `--auto-apply` was passed in the args**, skip the prompt entirely: set `fixes_applied=true`, print a one-line notice ("auto-apply: applying all merged findings without prompting"), and proceed to Step 6. The evaluation in Step 8 is still written *if codex ran*.
 
@@ -403,7 +417,7 @@ Do not re-print the evaluation in full — the operator can read the file. (In t
 | `--codex` passed | Codex gate forced on; codex runs (refuse earlier if codex absent) |
 | `--no-codex` passed | Codex gate forced off; custom-review only; no evaluation |
 | No codex flag (auto-decide) | Step 2.5 gate decides from change-nature + round; announce the one-line decision |
-| Codex gate-skipped (auto or `--no-codex`) | Single-reviewer merge; **no evaluation / provenance**; print `evaluation: skipped` note |
+| Codex gate-skipped (auto or `--no-codex`) | Single-reviewer merge; gate verdict still emitted (Step 5); **no evaluation / provenance**; print `evaluation: skipped` note |
 | Codex ran but fails / empty / times out | Mark sidecar `ok:false` (genuine failure); continue on custom-review; treat as single-reviewer for the eval (skip eval — no comparison) |
 | custom-review fails, codex ran OK | Proceed on codex alone (single-reviewer merge); skip eval (no comparison) |
 | custom-review fails, codex skipped/failed | No usable review — print reason(s) and exit before merging |
