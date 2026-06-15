@@ -24,6 +24,18 @@ It serves two goal shapes:
   authorization issue in `foo`"). Assume the target *is* reachable and keep generating
   angles. **"I didn't find it" is not "it isn't there."**
 
+**Before you pin the root — two one-glance gates (not planning ceremony):**
+
+- **Interpretation.** If the goal *statement* admits disjoint readings with different
+  *terminal truth conditions* — "find an SQLi vector in `fart`" reads as fart-as-target
+  *or* fart-as-tool, and solving one does **not** solve the other — resolve it before
+  committing. These are **different goals**, not alternative approaches to one goal, so
+  they are *not* OR-children (§3). Do any shared cheap prefix first; **ask to
+  disambiguate only** when the readings are disjoint with no dominant reading. This is
+  interpretation, distinct from the §2 question of *expanding* the ends.
+- **Size.** Estimate breadth/depth and pick **in-head vs persisted vs fan-out** (§8) up
+  front — one glance, so right-sizing is deliberate rather than discovered late.
+
 > Mechanical detail — the `state.json` schema, the step-by-step loop, subagent
 > input/output contracts, the resume procedure, and the full worked example — lives in
 > `references/search-protocol.md`. Read it before running a search deep enough to
@@ -112,6 +124,16 @@ assumed-safe pattern** (the one call site that skips the check; the forgotten or
 endpoint). Pivot the angle: different entry point, threat model, or layer. Assume the
 witness exists and search for it.
 
+**Dominating invariant — close the whole class at once.** Sometimes one proven
+invariant refutes *every* approach simultaneously (e.g. "every value reaching SQL is a
+typed bind or `json_extract` — nothing reaches SQL text"), cheaper and stronger than
+walking each sink. But an invariant is only as strong as its **coverage**: it hides a
+completeness claim that *is* the thing to prove. State the **quantified domain**, the
+**source of completeness** (every SQL builder, trigger, PRAGMA, JSON path, migration,
+generated SQL, extension hook, dynamic identifier — not just the obvious sinks), and the
+**weakest assumption** whose single counterexample would refute it. A confident
+invariant is the closure that *most* needs the §7 closure audit.
+
 **Informed lazy re-expansion — before any backtrack.** Closing a child is *learning*,
 not just elimination. When a problem node's current children are all closed, feed the
 node's goal + *why each child closed* back into the generator and ask what **new**
@@ -185,28 +207,60 @@ You may declare a node closed only when **both** hold:
 
 1. Informed lazy re-expansion (§4) — including the fresh-eyes subagent — yields nothing
    new, and
-2. a **hard-wall** basis holds — one of:
-   - *out of bounds* (needs authorization the user has not granted),
-   - *physically impossible*,
-   - *authorization already requested and denied*, or
-   - **verified-exhausted** — concrete evidence E closes a node's possibility space
-     (the investigative analog of *physically impossible*: evidence, not fatigue). Per
-     §1, closing one branch is not closing the goal: an OR node is verified-exhausted
-     only when *every* child branch is closed on evidence — for "is there an auth
-     bypass?" that means having *tried to break* the validator and *ruled out other
-     paths*, not merely confirmed it runs (worked through in §5). Its basis is the
-     conjunction "all children closed + §4 re-expansion exhausted," enumerating each
-     child's evidence.
+2. a **hard-wall** basis holds — one of: *out of bounds* (authorization not granted),
+   *physically impossible*, *authorization already requested and denied*, or
+   **verified-exhausted**. Closing one branch is never closing the goal (§1).
+   Verified-exhausted has two forms:
+   - **enumerative** — *every* child branch closed on evidence; basis = "all children
+     closed + §4 re-expansion exhausted," enumerating each child's evidence (for "is
+     there an auth bypass?": having *tried to break* the validator and *ruled out other
+     paths*, not merely confirmed it runs — §5);
+   - **dominating invariant** — one proven invariant refutes the whole class, carrying
+     its **coverage basis** (§4).
 
    **Never** close on "hard," "slow," "tedious," or **unforced surrender** — "I ran out
-   of ideas" *without* having run the §4 re-expansion ladder to exhaustion. That ladder
-   is exactly what separates legitimate *verified-exhausted* closure from forbidden
-   unforced surrender.
+   of ideas" *without* having run the §4 ladder to exhaustion.
 
-The **root** closes only after the global sweep (§6) finds nothing revivable. The
-serialized closed graph **is** the impossibility proof: every closed node's hard-wall
-basis plus the all-knowledge-sweep result — the formal statement, for investigative
-goals, of *not-found ≠ absent* (§1).
+**Audit the closure before it stands** (investigative root, and *any* dominating-invariant
+close). A confident **negative** is the costliest error in an investigative goal — a
+wrong "impossible" on a security audit. The fix is **structured proof obligations**, not
+a debate (a panel of same-model agents shares your blind spots and rubber-stamps). Before
+the close stands:
+
+1. **Derive a closure-obligation matrix** — make explicit, and persist, what the proof
+   must discharge, by class: **coverage** (every source / sink / entry / sibling /
+   generated / config / dynamic path the claim ranges over); **attack** (per safeguard:
+   absent, buggy, bypassable, mis-ordered, partial, stale, sibling-route — §4/§5 as a
+   checklist); **evidence** (each obligation cites a *closed node or artifact*, never a
+   bare assertion); **bounds** (each untried avenue is in-bounds-tried,
+   out-of-bounds-`ask-user`, or dominated by a named invariant); **tool** (where a tool
+   you build or run can enumerate a class — static analysis, route/call-graph, tests —
+   prefer it to model judgment). For a dominating-invariant close this matrix **is** the
+   coverage basis (§4), generalized to every investigative close.
+2. **Red-team the matrix** (§9), default-to-refuted — its job is to find an obligation
+   that is unmatched, weakly evidenced, or mis-classified, *not* to opine in prose.
+3. **Blind re-derivation** (high-stakes / ample budget only): hand a fresh agent only the
+   goal + bounds + artifacts — **never your proof** — and have it derive its *own*
+   obligation list; **diff** it against yours. This is the real independence: an
+   un-anchored agent surfaces a whole *category the search never imagined*, which a
+   defender of the existing proof structurally cannot.
+
+Every finding **routes** — never a transcript-only "concern": a **validated refuting
+fact** → ledger lead (§6), revival reopens the right node; an **unmatched obligation or
+unproven path** → a new child to explore (§4); an out-of-bounds suggestion → `ask-user`.
+Close only when the matrix is **fully matched** and the red-team (and any re-derivation
+diff) come up empty. The audit gates the closure it qualifies: a *non-root* invariant
+close gates only *that node*; at the **root** it additionally gates `impossible` (after
+§6's sweep) — never set the terminal state from an internal node. **One audit per
+closure-basis version, budget-aware:** if budget is spent, degrade to an `ask-user`
+"commission a deeper audit" (§10) — never an unbounded debate. The audit is persisted
+(matrix + basis + ledger length) so resume neither repeats nor skips it.
+
+The **root** closes `impossible` only after the global sweep (§6) *and* this audit come
+up empty. The serialized closed graph **is** the impossibility proof: every closed node's
+hard-wall basis, the all-knowledge-sweep result, and **the fully-matched obligation
+matrix that survived the closure audit** — the formal statement, for investigative goals,
+of *not-found ≠ absent* (§1).
 
 ## 8. Durable state & resume
 
@@ -237,7 +291,9 @@ resumable from disk, so it survives its own context limits.
   one of: success / closed + basis / surfaced sub-problems + emitted leads.
 
 The orchestrator records results, appends leads, runs event-driven revival, persists,
-and advances or backtracks the cursor. Full contracts in `references/search-protocol.md`.
+and advances or backtracks the cursor. The §4 fresh-eyes generator and the §7
+closure-audit subagents (red-team, blind re-derivation) use this same fresh-context,
+fire-and-return contract. Full contracts in `references/search-protocol.md`.
 
 ## 10. Loop guard
 
@@ -248,10 +304,17 @@ Determination is not thrashing.
 - Honor the per-branch and global budgets. **Ballooning cost or time is an `ask-user`
   child, not a dead-end** — surface the cost and the options, don't quit.
 - The search terminates in exactly one of three states, recorded in `terminal_state`,
-  each with its own `proof.md` rendering:
-  1. **solved** — the AND-path of succeeding approaches,
+  each with its own rendered proof (the proof **is the answer** to return — for an
+  investigative goal, "no vector, here's the structural why" is the deliverable — even
+  for an in-head run that never persisted `proof.md`):
+  1. **solved** — the AND-path of succeeding approaches. For an **investigative** goal,
+     a solve requires a concrete, **reproducible, in-bounds witness** (the PoC input,
+     the exact bypassing call path) — not a merely plausible path. A non-reproducible or
+     out-of-bounds "witness" is a false positive, the solve-side mirror of a false
+     "impossible."
   2. **user_redirected** — the user changed the goal or stopped you,
-  3. **impossible** — closed under all accumulated knowledge (§7).
+  3. **impossible** — closed under all accumulated knowledge, with a fully-matched
+     obligation matrix that survived the §7 closure audit.
 
 ## 11. Anti-rationalization
 

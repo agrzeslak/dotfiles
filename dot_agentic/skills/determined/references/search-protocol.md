@@ -61,9 +61,29 @@ the mismatch is detectable.
                                //   re-revived by an already-applied lead (livelock guard)
       "precondition": null,    // for an unexplored node: the assumption keeping it un-tried
       "expansion_phase": "children_open", // problem nodes only; null otherwise
-      "gated_approach": null   // ask-user nodes only: the {desc, signature} of the
-                               //   out-of-bounds approach this request would unblock;
-                               //   instantiated as an open approach sibling on approval
+      "request_kind": null,    // ask-user nodes only: authorize-bound | budget-decision |
+                               //   deeper-audit — selects the approval semantics below
+      "gated_approach": null,  // ask-user nodes only, request_kind=authorize-bound: the
+                               //   {desc, signature} of the out-of-bounds approach this
+                               //   request would unblock; instantiated as an open approach
+                               //   sibling on approval. (deeper-audit carries the gated
+                               //   node id + unaudited closure basis in `desc`/`refutation`
+                               //   instead; budget-decision carries the choice in `desc`.)
+      "coverage_basis": null,  // dominating-invariant closes only (§7): the invariant's
+                               //   quantified domain + completeness source + the NAMED
+                               //   weakest assumption (so one counterexample revives THIS node)
+      "obligations": null,     // investigative root-impossible / invariant close (§7):
+                               //   the persisted closure-obligation matrix — rows of
+                               //   { class: coverage|attack|evidence|bounds|tool, item,
+                               //     status: matched|child|ask-user|unmatched,
+                               //     evidence: <closed-node id / artifact / tool output> }.
+                               //   The close requires every row `matched`.
+      "refutation": null,      // the closure audit run against `obligations`:
+                               //   { ran, against_basis, at_ledger_len, redteam_result,
+                               //     blind_rederivation_diff }; persisted so resume neither
+                               //   repeats nor skips it
+      "witness": null          // investigative `solved` only: the reproducible, in-bounds
+                               //   PoC input / exact call path proving the result (§10)
     }
   }
 }
@@ -97,8 +117,10 @@ the status of **every** parent (not just the one DFS arrived from):
 - a **problem (OR)** parent is `solved` as soon as *any* of its children — which are
   approaches (§3) — is `solved`; it advances toward `closed` only when *all* children
   are `closed` (then the §4 re-expansion gate decides whether it truly closes). An
-  `ask-user` child **never** counts as the solving child — its approval unblocks a
-  sibling approach but is not itself a solution (see *The `ask-user` node*).
+  `ask-user` child is **excluded from both tests**: it never counts as the solving child
+  (its approval unblocks a sibling approach, it is not itself a solution), and a resolved
+  (`solved`/`closed`) `ask-user` child is ignored by the "all children closed" aggregation
+  (see *The `ask-user` node*).
 
 **Every closed node carries a `closure_basis` — including one closed by propagation.**
 A node closed *because a child or its own attempt closed* does not inherit a basis for
@@ -135,30 +157,48 @@ ledger. This is what keeps "all children closed" and ledger-learning firing for 
 ### The `ask-user` node (bounds escape + cost escape)
 
 `ask-user` is a third node `type`: a child created whenever the only way forward is
-out of bounds (§2) or when ballooning cost/time needs a decision (§10). It is the one
-construct that lets the search legitimately defer to the user instead of either crossing
-a bound silently or quitting. Its `desc` states exactly what is being requested
-(authorization to cross a named bound, or a budget/scope decision). Its lifecycle:
+out of bounds (§2), when ballooning cost/time needs a decision (§10), or when the §7
+closure audit is due but `budget.global_remaining` is spent — a "commission a deeper
+audit" request that defers the unrun audit to the user instead of declaring `impossible`
+on an unchecked closure. It is the one construct that lets the search
+legitimately defer to the user instead of either crossing a bound silently or quitting.
+Its `desc` states exactly what is being requested. **`ask-user` nodes are excluded from
+OR-solve propagation** (propagation rule above) — resolving one never marks the parent
+solved; it unblocks work, it does not achieve the goal. (Otherwise approval would declare
+the root solved before the authorized work ran — a false success.) Lifecycle, by
+`request_kind`:
 
-- **Pending** (`status: open`) — the request is recorded but unanswered. Like a problem
-  node, an `ask-user` node sits on the frontier until resolved; the orchestrator surfaces
-  its `desc` to the user.
-- **Approved** → the granted authorization is merged into the root `bounds`, and the
-  approach recorded in the node's **`gated_approach`** is **instantiated as a new `open`
-  approach sibling** (now in-bounds and selectable) so DFS actually tries it. The
-  `ask-user` node itself is marked `solved` only as "request resolved" — and `ask-user`
-  nodes are **excluded from OR-solve propagation** (propagation rule above), so approval
-  *never* marks the parent solved. Approval unblocks an approach; it does not achieve the
-  goal. (Letting approval OR-solve the parent would declare the root solved before the
-  authorized approach ever ran — a false success the carve-out prevents.)
-- **Denied** → the node is `closed` with the hard-wall `closure_basis` *"authorization
-  requested and denied"* (§7); it then counts toward its parent like any other closure.
-- **User changed or stopped the goal** → this is not a node-level outcome but a
-  whole-search one: set `terminal_state: user_redirected` and record `redirect` (below).
+- **Pending** (`status: open`) — recorded but unanswered; sits on the frontier (the
+  orchestrator surfaces its `desc`) until resolved.
+- **Approved:**
+  - *authorize-bound* → merge the granted authorization into the root `bounds` and
+    **instantiate `gated_approach` as a new `open` approach sibling** so DFS tries it;
+    mark the node `solved` (= "request resolved").
+  - *deeper-audit* → the user **grants budget**; run the §7 audit now (step 8) on the
+    gated node, mark this node `solved`, and let the audit decide. Approval **funds** the
+    audit, it does not waive it — the audit must still **pass normally** to close.
+    (`impossible` is reachable *only* through a survived root-gate audit, **never** by
+    approving an `ask-user` node — that is the one door this keeps shut.)
+  - *budget-decision* → apply the user's choice (raise/relax the cap → continue, or accept
+    the backtrack); mark `solved`.
+- **Denied:**
+  - *authorize-bound* → `closed` on the hard-wall basis *"authorization requested and
+    denied"* (§7); counts toward its parent like any closure.
+  - *deeper-audit* → the audit cannot run, so the closure cannot be verified and must
+    **not** stand as `impossible`. Mark this node `closed` (basis *"deeper audit declined
+    — closure unverified"*) and set `terminal_state: user_redirected` — the user stopped
+    the search short of a verifiable closure — recording it in `redirect`. (Reuses an
+    existing terminal, no "blocked" state; resume sees `terminal_state ≠ none` and never
+    re-asks.)
+  - *budget-decision* → mark this node `closed` (basis *"budget decision declined"*) and
+    take the conservative branch: backtrack if one remains, else set
+    `terminal_state: user_redirected`.
+- **User changed or stopped the goal** → a whole-search outcome, not node-level: set
+  `terminal_state: user_redirected` and record `redirect` (below).
 
-An `ask-user` node has `attempt_state: null` and `expansion_phase: null` — it is neither
-an OR nor an AND, and has no children of its own; it carries its request payload in
-`gated_approach` (the out-of-bounds approach to instantiate on approval).
+An `ask-user` node has `attempt_state: null` and `expansion_phase: null` — neither OR nor
+AND, no children; its payload is `gated_approach` (authorize-bound) or, for the other
+kinds, the gated node id + closure basis carried in `desc`/`refutation`.
 
 ### Frontier predicate (which nodes the cursor may select)
 
@@ -201,14 +241,20 @@ because new knowledge can make earlier rungs productive again.
 ## `proof.md` rendering
 
 The renderer selects on `terminal_state`; each state renders distinctly so a reader (or
-a resuming session) can tell them apart at a glance:
+a resuming session) can tell them apart at a glance. **These renderings are also the
+answer returned to the user** — for an in-head run that never wrote `proof.md`, produce
+the same shape inline (an investigative negative without its proof is not an answer):
 
 - **`solved`** — the **solution path**: the AND-path of succeeding approaches from root
-  to the success, each with the `result` that made it work.
+  to the success, each with the `result` that made it work; for an investigative goal,
+  the concrete reproducible **`witness`** (§10) is the headline.
 - **`impossible`** — the **impossibility proof**: the closed graph, every closed node
-  (leaf *and* internal) with its hard-wall `closure_basis`, and an explicit "global
-  insight-sweep ran; nothing in the ledger revives any closed node" line (the
-  all-knowledge certificate).
+  (leaf *and* internal) with its hard-wall `closure_basis` (plus `coverage_basis` for an
+  invariant close), the "global insight-sweep ran; nothing revives any closed node"
+  line, **the fully-matched obligation matrix** (every row → its discharging
+  node/artifact/tool output), **and the closure audit it survived** (the red-team found
+  no unmatched row; any blind re-derivation diff was empty) — together the all-knowledge
+  certificate.
 - **`user_redirected`** — an **audit record**: what was asked of the user (`redirect.asked`),
   the frontier node at the moment of redirect (`redirect.at_cursor`) and the surrounding
   open nodes, so the run is not mistaken for either active, solved, or impossible.
@@ -259,18 +305,46 @@ step:
    rung (`children_open → incontext_reexpanded → fresheyes_reexpanded`). Only after the
    **fresh-eyes** rung yields nothing — which advances the phase to `fresheyes_reexpanded`,
    leaving no rung left to run — does the node `close` (cursor backtracks to the next
-   selectable node).
-7. **Before the root closes:** run the **global insight-sweep** — re-apply the whole
-   `ledger` to **every closed node (leaf *and* internal) and every dormant `open` node
-   with an unsatisfied `precondition`**, matching each lead against both `closure_basis`
-   and `precondition` (subject to each node's `closed_at_ledger_len` guard from step 4,
-   so the sweep terminates). If anything revives, resume the loop. Only if nothing revives do
-   you set `terminal_state = "impossible"` and render the proof. Scanning only closed
+   selectable node). A node may *instead* close on a **dominating-invariant** basis (§7)
+   without enumerating children — but only after passing the **closure audit** (step 8)
+   run as a *node gate*: it sets just this node's `closed` status, never `terminal_state`.
+7. **Global insight-sweep (before the root closes).** Re-apply the whole `ledger` to
+   **every closed node (leaf *and* internal) and every dormant `open` node with an
+   unsatisfied `precondition`**, matching each lead against both `closure_basis` and
+   `precondition` (subject to each node's `closed_at_ledger_len` guard from step 4, so
+   the sweep terminates). If anything revives, resume the loop. Scanning only closed
    *leaves* would let a satisfiable dormant node or an internal closed node escape the
-   final check — reaching `impossible` without exhausting accumulated knowledge.
+   final check. If the sweep is empty, go to step 8 — do **not** declare `impossible`
+   yet.
+8. **Closure-obligation audit** — the same procedure runs at **two gates** (§7): as a
+   *node gate* before any **dominating-invariant** close (step 6), and as the *root gate*
+   at root-impossible finalization (after step 7's sweep). Before the close stands:
+   - **a. Derive & persist the obligation matrix** onto the node's `obligations` — rows
+     by class (coverage / attack / evidence / bounds / tool, defined in §7), each
+     pointing at the closed node / artifact / tool output that discharges it. Prefer a
+     tool you can build or run (static analysis, route/call-graph extraction, type-check,
+     test, script) over model judgment for any class a tool can enumerate.
+   - **b. Red-team the matrix** — a fresh subagent (default-to-refuted) hunts a row that
+     is unmatched, weakly evidenced, or mis-classified.
+   - **c. Blind re-derivation** (high-stakes / ample budget only) — a fresh agent gets
+     only goal + bounds + artifacts, **never the proof**, derives its *own* obligation
+     list; diff it against `obligations`.
 
-The loop also ends at `solved` (root solved) or `user_redirected` (user changed the goal
-or stopped you) — set `terminal_state` and render accordingly.
+   Route every finding — never a transcript-only concern: a **validated refuting fact** →
+   ledger lead (revival reopens the right node; resume the loop); an **unmatched
+   obligation / unproven path / diff delta** → a new `open` child (resume the loop); an
+   out-of-bounds suggestion → `ask-user`. Record matrix + audit on `refutation`.
+   **One audit per closure-basis version, budget-aware:** if `budget.global_remaining` is
+   spent, do not loop — convert the close into an `ask-user` "commission a deeper audit"
+   node. The audit **passes** only when the matrix is **fully matched** and the red-team
+   (and any diff) come up **empty**. **Consequence by gate:** a *node-gate* (invariant)
+   pass sets only *this node's* `closed` status; the *root-gate* pass — only after step
+   7's sweep is also empty — sets `terminal_state = "impossible"` and renders the proof
+   (the matrix + the audit it survived). Never set `terminal_state` from an internal node.
+
+The loop also ends at `solved` (root solved — for an investigative goal, only with a
+recorded `witness`: a reproducible, in-bounds PoC/call-path, §10) or `user_redirected`
+(user changed the goal or stopped you) — set `terminal_state` and render accordingly.
 
 ## Subagent contracts
 
@@ -296,6 +370,18 @@ not implicit.
   recorded with `status: closed`); or `surfaced` (+ the sub-problems it hit, each to
   become a child problem node, + any `leads` learned; `attempt_state: inconclusive` until
   those children resolve). Always returns the leads it learned, success or not.
+
+**Closure-audit subagents** (step 8; fresh-context, fire-and-return like the above):
+
+- **Red-team** — *receives* the goal, root `bounds`, and the `obligations` matrix +
+  closure basis; *returns* the single most unmatched / weakly-evidenced / mis-classified
+  row it can find (default-to-refuted), or "no gap." The §4 fresh-eyes generator shares
+  this shape (receives the node + closed-child bases, returns candidate approaches).
+- **Blind re-derivation** — *receives* only the goal + `bounds` + artifacts, **never the
+  proof or the matrix**; *returns* its own independently-derived obligation list to diff
+  against `obligations`. Withholding the proof is what makes the diff independent.
+- Both route as step 8 specifies (validated fact → lead; unmatched/unproven → child;
+  out-of-bounds → `ask-user`); neither writes state — the orchestrator does.
 
 ## Resume procedure
 
@@ -378,18 +464,30 @@ Trace:
    `attempt_state` inconclusive→succeeded**; with its attempt succeeded and its child
    solved, **n1 (AND) solves** (n4 likewise). Because n0 is OR, **n0 solves** the moment
    the first parent solves.
-10. `terminal_state = "solved"`; `proof.md` renders the **solution path**:
-    `n0 → n1 → n6` with the concrete bypass — a real authorization issue, found by
-    refusing to accept n6's first closure.
+10. `terminal_state = "solved"`; the solve records a **`witness`** — the concrete
+    admin/export request that reaches the resource with no `validate()` call (a
+    reproducible, in-bounds PoC, §10), not merely the path. `proof.md` renders the
+    **solution path** `n0 → n1 → n6` headed by that witness — a real authorization
+    issue, found by refusing to accept n6's first closure.
 
 Had L1 never surfaced and every branch stayed closed, step 8's revival would find
 nothing; the orchestrator would run the **global insight-sweep** over the whole ledger
-(against every closed node and every dormant precondition), and only then — nothing
-revivable — set `terminal_state = "impossible"`. Note what that closure requires: n0's
-*verified-exhausted* basis is **not** "every entry point calls `validate()`" — that
-closes only branch (a). It is the conjunction of *all* branches closed on evidence: the
-validator was attacked for a logic bug (n2) **and** for bypass/ordering (n3), **and**
-every other route to the resource was ruled out (n4, n5). Closing one branch is never
-closing the goal. The rendered proof lists *each closed node's* basis (leaf and
-internal) plus the all-knowledge certificate, so "no issue found" means *the surface was
-exhaustively closed — every way in tried*, not *the search gave up*.
+and, it being empty, the **closure-obligation audit**: derive the matrix — coverage rows
+for *every* path that reaches the resource (each registered route/handler, every entry
+point, middleware-skipping and sibling paths, handlers registered outside the guarded
+router, each actor role — enumerated by a route/handler-extraction script, not
+eyeballed), attack rows for the validator (absent / buggy / bypassable / mis-ordered /
+sibling-route), each row citing the closed node or tool output that discharges it — then
+red-team it for any
+unmatched row, and (high-stakes) a blind re-derivation: a fresh agent given only goal +
+bounds + repo derives its *own* obligation list, and the diff exposes any class the
+search never imagined. Any finding routes back as a lead or new child; only when the
+matrix is fully matched and the audit empty does it set `terminal_state = "impossible"`
+(or, if budget is spent, raise an `ask-user` "commission a deeper audit"). Note what the
+closure requires: n0's *verified-exhausted* basis is **not** "every entry point calls
+`validate()`" — that closes only branch (a). It is *all* branches closed on evidence: the
+validator attacked for a logic bug (n2) **and** for bypass/ordering (n3), **and** every
+other route ruled out (n4, n5) — and an independent re-derivation finding no missing
+class. Closing one branch is never closing the goal. So "no issue found" means *the
+surface was exhaustively closed, every way in tried, every obligation discharged, and an
+un-anchored re-derivation found no gap* — not *the search gave up*.
