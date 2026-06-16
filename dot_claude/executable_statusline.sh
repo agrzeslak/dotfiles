@@ -2,6 +2,10 @@
 input=$(cat)
 
 MODEL=$(echo "$input" | jq -r '.model.display_name // "?"')
+# Reasoning effort level (low/medium/high/xhigh/max).  The harness only emits
+# this for models that expose an effort setting, so it's empty otherwise and the
+# trailing segment collapses cleanly.
+EFFORT=$(echo "$input" | jq -r '.effort.level // empty')
 CTX=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
 # We only need the input-side current_usage fields to compute cache hit rate.
 USAGE_IN=$(echo "$input" | jq -r '.context_window.current_usage.input_tokens // empty')
@@ -266,8 +270,11 @@ if [[ "$TARGET_EPOCH" =~ ^[0-9]+$ ]]; then
   fi
 fi
 # --- Single-line layout ------------------------------------------------------
-# <model> · branch · git_status · ctx N% · 5h N% bar · 7d N% bar · peak/off-peak [· ↻N% if low]
+# <model> [effort] · branch · git_status · ctx N% · 5h N% bar · 7d N% bar · peak/off-peak [· ↻N% if low]
 OUT="$MODEL"
+# Effort rides directly on the model name (no separator), italicised so the
+# model stays the primary read and the effort reads as a qualifier of it.
+[ -n "$EFFORT" ] && OUT="$OUT ${ITALIC}$EFFORT${NOITALIC}"
 [ -n "$BRANCH"     ] && OUT="$OUT · ${BRANCH_ICON}$BRANCH"
 [ -n "$GIT_STATUS" ] && OUT="$OUT · $GIT_STATUS"
 [ -n "$CTX"        ] && OUT="$OUT · $(colorize "ctx $(printf '%.0f' "$CTX")%" "$CTX")"
