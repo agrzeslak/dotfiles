@@ -12,6 +12,10 @@ solving such incidental tasks until later. You do not need to fix them all strai
 block your progress; writing them down is often sufficient. **Do not write your accomplishments into
 this file.**
 
+When working in a git worktree, update the **main worktree's** `SESSION.md` (resolve via
+`git rev-parse --path-format=absolute --git-common-dir`, then `../SESSION.md`). `SESSION.md` is
+gitignored, so edits inside a worktree are discarded when the worktree is removed.
+
 ## Rust guidelines
 
 - When adding dependencies to Rust projects, use `cargo add`.
