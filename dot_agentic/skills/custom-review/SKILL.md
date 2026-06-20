@@ -72,15 +72,14 @@ Per the table above. For diff-based targets, save the raw diff once to `tmp/cust
 
 Read, in order:
 
-- Repo-root `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` (or `CONTRIBUTING.md` if present).
+- Repo-root `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` (or `CONTRIBUTING.md` if present). Read these as **rules the diff must obey**, not just priming — note each normative rule (error-handling convention, layering constraint, forbidden API, required check) so step 6 can falsify the change against it (*Rule-as-policy*, `reference/review-primitives.md`).
 - For `pr` target: PR title and body via `gh pr view <num> --json title,body`.
 - Any `ADR-*.md`, `docs/adr/`, `docs/decisions/`, `docs/rfcs/`, `docs/specs/` files **touched by the diff or named in the PR body**.
-- **Plan / spec / implementation-plan / roadmap docs landed in the diff** — read their prose as claims about the code shipping alongside them, not as inert narrative. Their bullets are first-class `claim-vs-reality` targets (see `reference/bug-patterns.md` #16); on contracts-only / doc-heavy PRs they are often where the only finding lives.
+- **The plan / spec / issue the change implements** — read its prose as claims about the code shipping against it, not inert narrative; its bullets are first-class claim-vs-reality and completeness targets (*Distrust the narrative* → plan-completeness, `reference/review-primitives.md`), and on contracts-only / doc-heavy PRs are often where the only finding lives. Locate it in order: (a) plan / implementation-plan / roadmap docs **landed in the diff**; (b) a doc or **gh issue linked from the PR body or commits** (`closes #N`, "implements …") — read a linked issue via `gh issue view <n>`; (c) failing those, the drift sweep's `rg` below (which already covers `docs/plans/`, `SESSION.md`, root `*.md`) doubles as the search for an **unlinked** plan. Do not run untargeted `gh issue` searches. If the change's framing presents it as closing/completing that plan or issue, an unmet obligation is a finding, not just coverage.
 - Each touched migration / schema file in full (`*.sql`, `prisma/schema.prisma`, `*_pb.proto`, `models.py`, etc.).
-- **The `cue` column of `reference/claude-failure-modes.md`** (full table, single-line cues only) — primes the sideways search at step 7.
-- **The class-triggered lookup table at the top of `reference/bug-patterns.md`** — note which classes the diff will touch; full sections are read at step 6.
+- **`reference/review-primitives.md`** — using the class-triggered lookup at the top, note which of the five roots the diff's change-classes touch, and skim those roots' **Failure signature** lines. They prime the falsification at step 6 and the sideways search at step 7.
 
-**ADR/spec drift sweep.** Extract concept terms from touched files (top-level directory names, basenames-without-extension, exported identifiers visible in hunk headers). Run one `rg -l '<term1>|<term2>|...'` across `docs/adr/`, `docs/specs/`, and any `adr/` or root `ADR-*.md`. Read every match in full. Untouched ADRs whose normative claims appear contradicted by the change are candidates for the doc-vs-impl-lies class — record them on candidate lines in step 8.
+**ADR/spec drift sweep.** Extract concept terms from touched files (top-level directory names, basenames-without-extension, exported identifiers visible in hunk headers). Run one `rg -l '<term1>|<term2>|...'` across `docs/adr/`, `docs/specs/`, `docs/plans/`, `SESSION.md`, root `*.md`, and any `adr/` or root `ADR-*.md`. Read every match in full. An untouched ADR / spec / plan whose normative claims the change **contradicts OR leaves stale** (now under-describing or mis-describing a surface it owns) is a candidate for the *Distrust the narrative* root — record it on a candidate line in step 8, severity graded by impact (a trivially-minor staleness is Low, not a drop). Note that an ADR may mandate the *opposite* of the backward-compat instinct (e.g. reject old on-disk data and delete compat code rather than add a `serde(alias)` shim); a change that adds the shim where the ADR says reject is itself an ADR violation.
 
 **Adjacent comments are claims.** For every touched code path, re-read the comments and docstrings immediately surrounding the change as if they were doc-bullets. A comment that overstates or contradicts the new code is a `claim-vs-reality` candidate.
 
@@ -117,7 +116,7 @@ Each claim block carries:
   ```
   Start the row with `actual-read-site` and `source-of-truth-at-read` deferred to step 7; finalize after sideways search. A finalized row that reveals the consumer reads `Default::default()`, `unwrap_or_default`, an unrelated config, a stale cache, or a dead branch — or no consumer at all — is the producer-dead class. Promote a candidate immediately.
 
-  **Inverse lens — returned-value discarded.** Producer-realization tracks a produced value flowing *toward* a read site. Run the mirror check too: for any function whose return value a sibling caller or a contract persists/propagates, does a NEW caller in the diff simply *drop* it (`let _ = f()`, unused `Ok(_)`, a success arm that ignores the returned value)? A cleanly-realized producer row does not clear this — the discarded-return defect lives at the *caller*, not the producer. See `reference/bug-patterns.md` #20; pair with the sibling behavior-parity diff (#3) since the discard usually shows up as asymmetry against a sibling that persists the value (e.g. a divert path drops a capture its normal-send sibling persists).
+  **Inverse lens — returned-value discarded.** Producer-realization tracks a produced value flowing *toward* a read site. Run the mirror check too: for any function whose return value a sibling caller or a contract persists/propagates, does a NEW caller in the diff simply *drop* it (`let _ = f()`, unused `Ok(_)`, a success arm that ignores the returned value)? A cleanly-realized producer row does not clear this — the discarded-return defect lives at the *caller*, not the producer. See *Trace, don't skim* (producer-realization & its inverse) and *Diff the siblings* in `reference/review-primitives.md`; the discard usually shows up as asymmetry against a sibling that persists the value (e.g. a divert path drops a capture its normal-send sibling persists).
 
 **Concrete planned realization (dormant producer with named activation surface).** If a `producer-realization:` line finalizes to no current `actual-read-site`, but the PR text or diff structure shows this arm is the canonical implementation for a named upcoming surface, promote correctness defects in the arm to findings (severity per activation impact), not Residual Risk. The "concrete impact at file:line" gate reads as *"impact lands when the planned consumer ships,"* not *"impact lands today."* This rule overrides the no-consumer dead-state default only for concrete planned realization; without the evidence below, dormant arms stay dead-state / Residual Risk per the existing default.
 
@@ -138,7 +137,7 @@ For each claim in `## Claims`, write **≥3 falsification lines** plus four sub-
 - `async_invalidation` — every event that should cancel in-flight work, not just replacement requests.
 - `deletion_orphans` — for deletion-claims, what still references the removed thing (docs, metrics, configs, flags, monitoring, tests, generated code).
 
-Before writing falsifications, **read the bug-patterns sections triggered by this diff's classes** (typically 2–4 of the 19) from `reference/bug-patterns.md`. Prime attention; do not tick mechanically.
+Before writing falsifications, **work each claim through the roots its change-class touches** (`reference/review-primitives.md` — typically 2–3 of the five) and their instances. Prime attention; do not tick mechanically.
 
 `inconclusive` may appear transiently but must resolve to `disproved` / `reachable-defect` / `open-question` before step 8.
 
@@ -214,23 +213,21 @@ Verdict handling:
 
 Skip for purely local Low findings — the operator's own re-read at step 9 is the check at that scale.
 
-### 11. Failure-mode preflight & write outputs
+### 11. Primitive preflight & write outputs
 
-Silently answer the 13-question preflight (one line each, internal; not printed to chat). Any "no" returns to the named step and re-runs everything downstream:
+Silently answer the preflight (one line each, internal; not printed to chat). It checks that each **root primitive** (`reference/review-primitives.md`) the change touches was actually applied to each changed obligation, plus the cross-cutting evidence discipline. Any "no" returns to the named step and re-runs everything downstream.
 
-1. (step 2) Did I read CLAUDE.md / AGENTS.md / ADRs, run the ADR drift sweep, and prime patterns?
-2. (step 7) Did I extend past changed lines into producers, consumers, and downstream effects?
-3. (step 8) Did I read touched tests as artifacts — fixture blindness, assertion correctness, coverage gaps — rather than as proof?
-4. (step 6) Did I treat refactor-claims as falsifiable and look for behavioral drift?
-5. (step 7) Did I enumerate sibling axes for every claim that has them?
-6. (step 6) Did I check error / loading / empty / cancel / retry / timeout / permission-denied / partial-success paths?
-7. (step 7) Did I search producers AND consumers of every changed surface and classify every hit?
-8. (step 9 / step 10) Did I drop every unverified suspicion instead of hedging it into a finding?
-9. (step 6) Did I check async invalidation — every event that should cancel in-flight work?
-10. (step 6 / step 7) Did I separate UI gating from server-side authorization for every permission-touching change?
-11. (step 6) Did I check backward compatibility against old data / old clients / old configs / old enums / cached state / persisted UI state?
-12. (step 8) For every producer with a step-6 claim, did I verify a test actually drives the producer fn (not just constructs its output struct) AND that the fixture exercises its real failure modes rather than pre-assigning values (globally-unique IDs, always-valid inputs, non-colliding counters) that mask them?
-13. (step 3 / step 5 / step 7) For every change spanning >1 component, mirroring a sibling, or finalizing data from a separate task, did I review it by *composition* rather than per-component-in-isolation — i.e. diff the new path against its sibling for behavior the sibling has and it lacks (#3), check whether any returned value is discarded before persistence (#20), confirm every async teardown path reaches the completeness signal (#21), and for UI→command→output edit chains assert the output artifact carries the operator's *full* edit, not just one component (#19 step 3)?
+For each root the change touches:
+
+1. **Trace** (steps 5, 7) — did I follow every changed value/contract to its real read-site and operator-observable effect, in BOTH directions (consumers AND producers), including any returned value a caller drops and the full dispatch chain of any operator-facing entry?
+2. **Diff the siblings** (steps 6, 7) — for every changed obligation (behavior, guard, authorization check, error-branch, default, terminal-state, backward-compat across versions, and the other sites a fix touches), did I find its sibling-set and diff each member — including the pre-refactor version for a "no behavioral change" claim?
+3. **Probe the negative space** (step 6) — did I check the absent / empty / malformed / old-data / boot / fall-through / permissive case, including the permissive branch of every destructive-gating predicate?
+4. **Follow the async lifetime** (step 6) — every invalidating event that should cancel in-flight work, every teardown bound that must reach a completeness signal, every ordering assumption between concurrent tasks?
+5. **Distrust the narrative** (steps 2, 9) — did I read the touched docs / comments / ADRs / plan-docs as falsifiable claims, both directions (false claim → finding; a *true* claim describing broken behavior → the behavioral roots, not a pass); locate the plan / issue the change implements and check every obligation shipped to spec; flag each governing doc the change left stale; and falsify the change against the repo's rule-docs?
+
+Cross-cutting (applies to every root):
+
+6. **Evidence discipline** (steps 8–10) — does a real test drive each producer (not a hand-built output struct, not a value-masking fixture)? And did I drop every unverified suspicion to an Open Question or to nothing, rather than hedge it into a finding?
 
 Record exactly `preflight: passed` in `## Preflight` once all questions are "yes" and downstream rework is complete. Do not render `review.md` while a `returned-to=<step>` state is open; `returned-to` is transient.
 
@@ -418,8 +415,7 @@ Read at the points named in the workflow, not as optional context.
 | File | Read when | Purpose |
 |---|---|---|
 | `reference/notes-file.md` | Before step 3 (enumerate surfaces) | Mandatory `notes.md` template + class taxonomy for the candidate ledger. |
-| `reference/bug-patterns.md` | Class-triggered lookup table at step 2; triggered full sections at step 6 (falsifications) | 21 heuristics priming attention to specific bug classes — read 2–4 sections per review. |
-| `reference/claude-failure-modes.md` | Cue column at step 2; archetype 12–14 detail consulted at step 9 if a candidate fits one of those classes (modes 15–17 point to their bug-patterns) | 17 archetypes of Claude reviews missing bugs — cues prime sideways search; detail catches blind spots before promotion. |
+| `reference/review-primitives.md` | Class-triggered lookup + failure-signatures at step 2; in-scope roots at step 6 (falsifications) and step 9 (pre-promotion) | The five root review primitives — every detection check is an instance of one. Apply the 2–3 roots a change touches; each carries its principle, failure-signature cues, instances, and search targets. |
 | `reference/output-format.md` | Before step 11 (write `review.md`) | Severity rubric, finding shape, skip list, coverage footer, zero-findings rule. |
 
 `reference/maintaining.md` is **not** part of a review — do not read it while reviewing. It is the discipline for *editing* this skill (read-path budgets, merge-don't-only-append, generic examples, single source of truth). Consult it only when changing the skill itself.

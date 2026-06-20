@@ -9,6 +9,18 @@ description: Review a target with claude `/custom-review` always, plus codex `/r
 
 `/multi-review` reviews a target with claude `/custom-review` — always — and, **when warranted**, codex `/review` alongside it, then synthesizes a merged best-of review. Every run emits a **gate verdict** — the pre-fix critical count, `pass` iff zero — which is the skill's primary machine-readable output and is computed from the merged review independent of whether codex ran (see Step 5). When both reviewers ran, the skill *additionally* writes an evaluation comparing them so the user can A/B-test the review skills and improve them over time. The gate is the verdict (always present); the evaluation is the codex-only analysis.
 
+**Repo-local conformance reviewer (generic extension point).** This is a documented plug, not a
+reference to any one project: **any** repository may opt in by defining a skill at
+`.claude/skills/gate-check/SKILL.md` that supports a review mode taking the same target arg and
+returning a findings report. When that file exists at the repo root, it runs as a third reviewer
+on a different axis — repo-convention conformance (e.g. ADR/spec violations, stale living docs,
+size budgets) rather than correctness — and is otherwise inert: a repo without it is **wholly
+unaffected** and the skill never mentions it. The coupling is exactly the slug + path + the
+review-mode/report shape below; no repo specifics live in this skill. It always runs when present
+(no budget gate), its findings merge like any reviewer's and so its criticals count toward the
+gate verdict, but it is **excluded from the codex A/B evaluation** (different axis, nothing to
+compare).
+
 **Codex is selective by design.** Codex is the higher-signal reviewer — it routinely catches issues the others miss — but its usage budget is far lower and is easily exhausted. So codex runs only when the change is worth that budget: a fundamental/critical change with far-reaching effects, or one with enough technical subtlety to be easy to get wrong. It should *not* burn budget on mechanical, doc, config, or UI changes, or on routine re-review rounds where a slip is low-stakes. That decision is made by the **codex gate** in Step 2.5 — auto-decided by default, or forced by the caller with `--codex` / `--no-codex`. The 99% path is an agent invoking `/multi-review` and letting the gate decide; centralizing the logic here (rather than in every caller) is deliberate, so it can be tuned in one place.
 
 Key difference from `/codex-review`: this skill is **invoked fresh** (not after a prior `/review`). The target must be determined from `/multi-review` arguments, not from earlier conversation context.
@@ -166,6 +178,11 @@ Carry `run_codex` (and the announced reason) into the steps below.
 
 If `run_codex` is true, both reviewers start in a **single message** with two tool calls so they run concurrently. If `run_codex` is false, **skip Reviewer A entirely** and spawn only Reviewer B (the foreground `custom-review` Agent) — there is no codex Bash call, no `codex-<slug>.*` files, and no background process to monitor.
 
+Additionally, if `.claude/skills/gate-check/SKILL.md` exists at the repo root, spawn Reviewer C
+in the **same message** as the other enabled reviewer(s) so they all run concurrently. Check for
+that file before composing the spawn message (a single `test -f`); if it is absent, there is no
+Reviewer C and nothing about gate-check is printed.
+
 ### Reviewer A — codex (background Bash) — *only if `run_codex` is true*
 
 Skip this entire subsection when the Step 2.5 gate set `run_codex = false`.
@@ -215,6 +232,37 @@ Sample prompt (fill in concrete values):
 >
 > If the skill refuses or fails, reply with a single line: `FAILED: <one-sentence reason>`. Do not paraphrase or echo the review body in your reply.
 
+### Reviewer C — repo-local gate-check (Agent tool, foreground) — *only if the repo defines it*
+
+Skip this subsection entirely when `.claude/skills/gate-check/SKILL.md` does not exist at the repo
+root. The not-defined case is the common one and is **silent** — printing "no gate-check here" on
+every run in every repo that hasn't opted in would be noise, and the decoupling guarantee is that
+such repos are wholly unaffected.
+
+When the repo *does* define it, **announce gate-check's status in one line** once it returns
+(mirrors the codex one-liner), so a defined-but-failed conformance reviewer is never silent —
+fail-open must not mean fail-quiet:
+
+```
+gate-check: <ran N findings (C critical) | failed — <reason>>
+```
+
+Spawn a general-purpose Agent in the same message as the other reviewer(s):
+
+> You are running a repo-conformance review as part of a multi-reviewer pass. Read
+> `.claude/skills/gate-check/SKILL.md` at the repo root and execute that skill exactly as
+> written, in review mode, on the target: `<canonical reviewer arg>`. Follow its workflow,
+> reference files, mandated commands, and output format; let it write its report under its
+> standard `tmp/gate-check-<ts>/` path. When it finishes, reply with exactly three lines:
+>
+> ```
+> REPORT_PATH=<absolute path to the report.md it wrote>
+> FINDINGS=<integer count of findings>
+> CRITICALS=<integer count of Critical findings>
+> ```
+>
+> If the skill refuses or fails, reply with a single line: `FAILED: <one-sentence reason>`.
+
 ### Why one Bash + one Agent in one message
 
 (Applies when `run_codex` is true.) Both are independent; issuing them in a single message starts them in parallel. Codex runs in background because its 10-min timeout is longer than the Agent typically takes; the custom-review Agent is foreground (its result returns when complete). After this message, monitor for the background codex completion before proceeding.
@@ -235,6 +283,12 @@ After the enabled reviewer(s) finish, normalize their outputs so Step 4 can read
    ```
 4. On failure: write a placeholder `tmp/multi-review/custom-review-<slug>.md` containing exactly `FAILED: <reason>` and a status sidecar with `"ok":false,"reason":"<reason>"`.
 
+**Reviewer C (gate-check), when it ran:** same collection pattern as Reviewer B — parse
+`REPORT_PATH=`, copy the report to `tmp/multi-review/gate-check-<slug>.md`, and write
+`tmp/multi-review/gate-check-<slug>.status.json` with `findings` and `criticals` counts. On
+failure, write the `FAILED: <reason>` placeholder and an `"ok":false` sidecar; a failed
+gate-check never aborts the run (custom-review remains the load-bearing reviewer).
+
 **Post-write sanity check.** Before proceeding to Step 4, confirm that `tmp/multi-review/custom-review-<slug>.md` and (if codex ran) `tmp/multi-review/codex-<slug>.md` exist as distinct files.
 
 For codex (Reviewer A):
@@ -251,7 +305,12 @@ For codex (Reviewer A):
 
 `Read` each available `tmp/multi-review/*-<slug>.md` output (skip any whose status sidecar is `"ok":false` — this includes a gate-skipped codex). Produce **one** merged review and write it to `tmp/multi-review/merged-<slug>.md`.
 
-**Single-reviewer case (codex skipped or failed):** only custom-review's output is available. The merge degrades to a pass-through — still apply synthesis rule 2 (re-read each finding's cited code and keep only those you now believe are real), still group by severity, still single-voice. The consensus rule (1) is moot with one reviewer. A merged review is still produced because Step 6 applies fixes from it.
+**Single-reviewer case (codex skipped or failed):** only custom-review's output is available. The merge degrades to a pass-through — still apply synthesis rule 2 (re-read each finding's cited code and keep only those you now believe are real), still group by severity, still single-voice. The consensus rule (1) is moot with one reviewer. A merged review is still produced because Step 6 applies fixes from it. (Gate-check, when it ran, is a second source even in this case — "single-reviewer" refers to the correctness axis; conformance findings still merge in.)
+
+**Gate-check findings in the merge:** they enter the merged review like any reviewer's, with one
+extra rule — preserve each finding's `binding-source:` citation (ADR / living doc / budget pin)
+in the merged entry; that citation is what makes a conformance finding actionable. Synthesis
+rule 2 (re-read before keeping) applies to them too.
 
 Synthesis rules (same as `codex-review` Step 5):
 
@@ -277,12 +336,12 @@ Print the full contents of `merged-<slug>.md` inline in the chat.
 The **gate** is the pre-fix critical count, and it is the skill's primary machine-readable output: callers such as `plan-implement-merge` loop on it (review → fix → re-review) until it reads zero. The merged review always groups findings by severity (blocking → medium → optional) and is produced *before* any fixes (Step 6), so its blocking section **is** the pre-fix critical set — whether or not codex ran. Count it from the merged review and print exactly one line:
 
 ```
-gate: <pass|fail> — <N> pre-fix critical finding(s) [reviewers: <custom-review|custom-review+codex>]
+gate: <pass|fail> — <N> pre-fix critical finding(s) [reviewers: custom-review[+codex][+gate-check]]
 ```
 
-`pass` iff `N == 0`. Treat any finding the merged review labels `blocking`, `critical`, or `P0` as critical (the merge groups under a `blocking` heading; the synonyms guard against drift). This line is emitted on **every** run — codex included, gate-skipped, or `--no-codex` — so the no-criticals gate never depends on codex having run. It is distinct from the Step 8 evaluation (an A/B comparison that *is* codex-only); the gate is the verdict, the evaluation is the analysis.
+`pass` iff `N == 0`. Treat any finding the merged review labels `blocking`, `critical`, or `P0` as critical (the merge groups under a `blocking` heading; the synonyms guard against drift). Because gate-check findings merge in like any reviewer's (Step 4), a critical **conformance** finding counts toward `N` and can fail the gate on its own — that is the point of running it in the cycle. List in the `reviewers:` tag only the reviewers that actually ran. This line is emitted on **every** run — codex included, gate-skipped, or `--no-codex` — so the no-criticals gate never depends on codex having run. It is distinct from the Step 8 evaluation (an A/B comparison that *is* codex-only); the gate is the verdict, the evaluation is the analysis.
 
-Examples: `gate: pass — 0 pre-fix critical finding(s) [reviewers: custom-review]`; `gate: fail — 2 pre-fix critical finding(s) [reviewers: custom-review+codex]`.
+Examples: `gate: pass — 0 pre-fix critical finding(s) [reviewers: custom-review]`; `gate: fail — 2 pre-fix critical finding(s) [reviewers: custom-review+codex]`; `gate: fail — 1 pre-fix critical finding(s) [reviewers: custom-review+gate-check]`.
 
 ### Apply prompt
 
@@ -332,6 +391,8 @@ Do **not** block the evaluation on a green check — the evaluation is about rev
 **Skip this entire step when codex did not run** (gate-skipped via Step 2.5, forced off with `--no-codex`, or failed). The evaluation is an **A/B comparison** of two reviewers — with only `custom-review`, there is nothing to compare, no signal to tune the skills on, and no provenance file was written. In that case do not write `evaluation-<slug>.md`; instead print a one-line note: `evaluation: skipped — only custom-review ran (no A/B comparison)`. Steps 5–7 (merge, apply, verify) still happened, so the fixes are real; only the comparison artifact is omitted.
 
 Otherwise (codex ran), write to `tmp/multi-review/evaluation-<slug>.md`. Always written when codex ran — even when fixes were declined. Fix-grounded fields without evidence are explicitly marked `not assessed (fixes declined)`; do not guess.
+
+**Gate-check is never part of the A/B.** It reviews a different axis (conformance, not correctness), so it appears in neither reviewer scorecard and is never ranked against codex/custom-review. At most note in section 1 that it ran and how many findings it contributed to the merge; the comparison is strictly codex vs. custom-review.
 
 Required sections:
 
@@ -423,3 +484,6 @@ Do not re-print the evaluation in full — the operator can read the file. (In t
 | custom-review fails, codex skipped/failed | No usable review — print reason(s) and exit before merging |
 | Operator declines to fix | Skip Steps 6–7; still write evaluation (if codex ran) with fix-grounded fields marked `not assessed` |
 | `--auto-apply` passed in args | Skip the Step 2 collision prompt (overwrite) and the Step 5 apply prompt; apply all merged findings automatically. Does **not** affect the codex gate. Evaluation still written *if codex ran* |
+| Repo has no `.claude/skills/gate-check/SKILL.md` | Skip Reviewer C **silently** — it is a per-repo opt-in; the repo is wholly unaffected and nothing about gate-check is printed |
+| Repo defines gate-check, but it fails | Announce `gate-check: failed — <reason>`; sidecar `ok:false`; continue without it (never aborts the run — custom-review stays load-bearing) |
+| Gate-check raises a critical finding | It merges into the blocking section like any reviewer's; counts toward the gate verdict's `N`; excluded from the codex A/B evaluation |
