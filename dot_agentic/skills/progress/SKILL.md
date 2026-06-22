@@ -69,8 +69,8 @@ Rules:
 
   Omit it entirely when the plan is fully `[x]` or every remaining chunk is `[!]`
   blocked on incomplete work. One chunk, one line, no rationale. If the user accepts,
-  run `/handoff` scoped to that one chunk, then feed the brief to
-  `/plan-implement-merge`.
+  run `/handoff` scoped to that one chunk and have the brief instruct the agent to do
+  the work in a git worktree, then feed the brief to `/plan-implement-merge`.
 - If the chat contains **no plan**, output exactly one line: `No plan in this conversation.`
 
 ## Example
