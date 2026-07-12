@@ -65,12 +65,28 @@ Rules:
   an actionable next chunk remains (earliest non-`[x]` chunk whose dependencies are all
   `[x]` — usually the `[~]`, or the first `[ ]` after it), append exactly one line:
 
-  `Next: PR 3 — background reindex job. /handoff → /plan-implement-merge it?`
+  `Next: PR 3 — background reindex job. /handoff → /plan-implement-merge it in a background subagent?`
 
   Omit it entirely when the plan is fully `[x]` or every remaining chunk is `[!]`
-  blocked on incomplete work. One chunk, one line, no rationale. If the user accepts,
-  run `/handoff` scoped to that one chunk and have the brief instruct the agent to do
-  the work in a git worktree, then feed the brief to `/plan-implement-merge`.
+  blocked on incomplete work. One chunk, one line, no rationale.
+
+  If the user accepts:
+
+  1. **Generate the handoff yourself**, here, with `/handoff` scoped to that one
+     chunk. You hold the conversation context, so you produce the distilled,
+     self-contained brief — the same great handoff we already have.
+  2. **Show that brief in the chat** so the user can eyeball or correct it before a
+     long autonomous run.
+  3. **Dispatch one fresh subagent** to run the implementation in the background:
+     `subagent_type: general-purpose`, `isolation: 'worktree'` (its own worktree so it
+     doesn't collide with this session), `run_in_background: true`. Its **prompt is the
+     handoff brief verbatim**, followed by a line instructing it to execute by running
+     `/plan-implement-merge` with that brief as the task description.
+
+  It must be a *fresh* subagent, **not a fork** — the handoff is built for a
+  zero-context receiver, so the fresh subagent is exactly its intended consumer. A fork
+  would drag this whole conversation along and defeat the distillation the handoff
+  exists to do.
 - If the chat contains **no plan**, output exactly one line: `No plan in this conversation.`
 
 ## Example
@@ -89,7 +105,7 @@ search-indexing refactor — 2/4 chunks done
     [ ] cancellation
 [!] PR 4: wire config switch (blocked on PR 3)
 
-Next: PR 3 — background reindex job. /handoff → /plan-implement-merge it?
+Next: PR 3 — background reindex job. /handoff → /plan-implement-merge it in a background subagent?
 ````
 
 PR 2 read as in-progress in the chat; the merged-PR check found #430 and bumped it to
@@ -108,3 +124,5 @@ omitted.
 | Justify *why* the next chunk is next, inside the offer | Offer is one line: chunk + the handoff question. No rationale. |
 | Use `DONE` / `IN PROGRESS` text labels | Use the markers only. |
 | Multiple `[~]` items | Pick the single active one; rest are `[ ]`/`[!]`. |
+| Fork the subagent, or otherwise dump this conversation into it | Use a *fresh* subagent — the handoff is self-contained; a fork defeats the distillation it exists for. |
+| Run `/plan-implement-merge` yourself in this session | Only `/handoff` runs here. The fresh background subagent runs `/plan-implement-merge`. |
