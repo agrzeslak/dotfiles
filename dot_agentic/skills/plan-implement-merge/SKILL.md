@@ -48,6 +48,7 @@ The orchestrator runs these directly (they are light and produce part of the dur
 3. **Required skills available:** `superpowers:brainstorming`, `superpowers:writing-plans`, `superpowers:test-driven-development`, `superpowers:subagent-driven-development`, `superpowers:verification-before-completion`, `plan-review-skill`, `multi-review`, `cleanup`. Check the available-skills list; refuse with the missing names if any are absent. Additionally, **if** the argument requests isolation (see Branching), also require `superpowers:using-git-worktrees` and refuse if absent — checking now avoids failing mid-run after planning has started.
 4. **`codex` is on `PATH`.** Run `command -v codex`. If missing, refuse — codex is required for the plan-review loop (Step 2). In the multi-review loop (Step 4) codex is used *selectively*: multi-review's own codex gate auto-decides per round whether to spend codex's limited budget, so codex won't run every round — but it must still be installed so the gate can choose to use it.
 5. **`multi-review` supports `--auto-apply`.** This pipeline runs `/multi-review` inside a subagent loop where no human is present to answer its "Apply these fixes now?" prompt. Confirm the installed `multi-review/SKILL.md` documents an `--auto-apply` control flag (grep for `--auto-apply`); refuse if absent so the operator can update the skill before relying on an autonomous loop that would otherwise stall.
+6. **The installed `multi-review` runs `code-review` alongside `custom-review`.** Grep the same `multi-review/SKILL.md` for `code-review`. If absent, do **not** refuse — the loop still works on one claude reviewer — but print one line saying the review gate will run with a single claude reviewer this run, so a thin review round is never mistaken for a clean one. Step 4's round prompt asks for per-reviewer counts that an older `multi-review` cannot supply; this is where that mismatch is caught, rather than in a confusing subagent report.
 
 ## Branching
 
@@ -129,9 +130,18 @@ Round N — plan review
 
 Plan file: <path>
 
-Run these two reviews in parallel:
+Run these reviews in parallel:
   1. codex `/review` against the plan file. Save output to tmp/plan-implement-merge/round-N/codex.md.
   2. `/plan-review-skill` against the plan file. Save output to tmp/plan-implement-merge/round-N/plan-review.md.
+  3. Generic extension point (no-op unless the repo opts in): only if the repo defines a local
+     gate-check skill (`.claude/skills/gate-check/SKILL.md` exists at the repo root) — any repo
+     may provide one supporting a plan mode that takes the plan path and returns a findings
+     report — execute that skill in plan mode against the plan file, reading its SKILL.md and
+     following it exactly. Save its report to tmp/plan-implement-merge/round-N/gate-check.md.
+     Its findings carry binding-source citations (e.g. ADR / living doc / budget pin) and
+     ready-to-apply `plan-change:` lines; preserve both when merging. Its criticals count toward
+     the stop rule like any reviewer's. A repo without the skill is unaffected — skip this step
+     silently.
 
 If codex fails or reports usage exhaustion, continue with plan-review-skill alone, but raise
 the stop threshold for this and all subsequent rounds: stop only when no critical AND no high
@@ -141,8 +151,10 @@ Merge findings. Apply every finding regardless of severity by editing the plan f
 
 Report back:
   - Whether codex ran successfully.
-  - Counts of findings by severity, per reviewer — counted from the *pre-fix* review output,
-    before any edits. Print the explicit critical count (and high count if codex was unavailable).
+  - Counts of findings by severity, per reviewer that ran (codex when it ran; plan-review-skill
+    always; the repo-local gate-check reviewer when the repo defines one) — counted from the
+    *pre-fix* review output, before any edits. Print the explicit critical count (and high count
+    if codex was unavailable).
   - Do NOT run a second review to confirm your fixes — the orchestrator decides whether to
     dispatch another round based on the pre-fix counts you report.
 ```
@@ -165,7 +177,7 @@ After all tasks complete, dispatch a verification subagent to run `superpowers:v
 
 Orchestrator loops; each round is a fresh subagent. Stop per the [critical-count stop rule](#critical-count-stop-rule-loop-steps-2-and-4) on the **pre-fix** critical count across whichever reviewers ran.
 
-Initialize `<repo root>/tmp/review-comparison.md` if it does not exist. It is a running cumulative log designed to drive **improvements to the claude reviewer (`custom-review`)** specifically — each entry should be actionable for future skill edits (what custom-review missed that codex caught, what it over-flagged, where its depth fell short of or exceeded codex).
+Initialize `<repo root>/tmp/review-comparison.md` if it does not exist. It is a running cumulative log designed to drive **improvements to `custom-review`** specifically — the one reviewer in the roster that is ours to edit. Each entry should be actionable for future skill edits: what `custom-review` missed that a peer reviewer caught, what it over-flagged, where its depth fell short of or exceeded the peers. Its peers are the built-in `/code-review` (every round) and codex (when multi-review's gate spends the budget), so **every** round yields comparison data now, not only codex rounds.
 
 Per round:
 
@@ -187,8 +199,15 @@ Per round:
    Do NOT pass --codex or --no-codex: let multi-review's codex gate auto-decide whether this
    change and this round warrant codex's limited budget. codex may legitimately be skipped
    (e.g. a doc/mechanical change, or a clean later round); that is expected, not a failure.
+   The two claude reviewers — /custom-review and the built-in /code-review — are ungated and
+   run in parallel every round, so a codex-skipped round is still a multi-reviewer round.
    The skill saves verbatim reviewer outputs under tmp/multi-review/, synthesizes a merged
-   review, and — only when codex also ran — produces per-reviewer A/B notes.
+   review, and writes per-reviewer comparison notes for whichever reviewers ran.
+
+   Do NOT try to invoke /code-review yourself, and do not "help" if multi-review's nested
+   call fails: it is user-invocable only, so the Skill tool refuses it and the nearest listed
+   skill (custom-review) gets run instead — which silently turns two reviewers into one
+   duplicated one. multi-review owns that invocation.
 
    Apply every finding regardless of severity, following the TDD-for-fixes policy appended below.
    **Commit all fixes** with a clear semantic message and leave NO uncommitted changes — the
@@ -197,14 +216,24 @@ Per round:
    review pass to confirm the fixes — the orchestrator decides whether to dispatch another round.
 
    Report back:
-     - Counts of findings by severity, per reviewer that ran (custom-review always; codex only
-       if the gate ran it) — from the *pre-fix* review output, before any fixes.
+     - Counts of findings by severity, per reviewer that ran (custom-review and code-review
+       always; codex only if the gate ran it; the repo-local gate-check reviewer when the repo
+       defines one — multi-review runs it automatically) — from the *pre-fix* review output,
+       before any fixes. code-review ships no severity labels of its own, so report the
+       severities multi-review assigned its findings in the merge, plus its CONFIRMED/PLAUSIBLE
+       split.
      - The pre-fix critical count across whichever reviewers ran (explicit number).
      - For the comparison file: per-reviewer observations on accuracy (true vs false positives),
        depth (did they trace data flow / cite file:line / catch semantic gaps), and
-       over/underrepresentation — focused on what custom-review did or missed vs codex.
+       over/underrepresentation — focused on what custom-review did or missed vs its peers.
+       Separate misses forced by a peer's *structure* (code-review's finding cap, its effort
+       level, codex getting no focus text) from misses that reflect judgment; only the latter
+       says anything about reviewer quality.
+     - The effort level code-review ran at, and whether it ran the agent fan-out or degraded to
+       a single inline pass.
      - Whether codex ran this round; if not, the one-line reason multi-review printed
        (e.g. "skipped — round 2, prior round had 0 blocking findings").
+     - Any reviewer that failed, with multi-review's one-line reason.
    ```
 
    Before dispatching, append two blocks to that prompt verbatim, from [Shared subagent conventions](#shared-subagent-conventions): the **TDD for fixes** bullets and the **Comment hygiene** blockquote. Both sections are the canonical copy source — paste them as-is.
@@ -217,33 +246,39 @@ Per round:
 
      **Diff scope:** <files / focus text given to multi-review>
      **Codex ran:** yes | no (if no: <gate reason, e.g. "auto-skipped — clean round 2" / "unavailable">)
+     **code-review:** <level> · <fan-out | single-pass> | failed — <reason>
 
      ### Per-reviewer scorecard
 
-     | Reviewer | True positives | False positives | Missed (caught by other) | Depth notes |
-     |---|---|---|---|---|
-     | codex /review | … | … | … | … |
-     | /custom-review | … | … | … | … |
+     | Reviewer | True positives | False positives | Missed (caught by peer) | Structural misses | Depth notes |
+     |---|---|---|---|---|---|
+     | /custom-review | … | … | … | … | … |
+     | /code-review | … | … | … | … | … |
+     | codex /review | … | … | … | … | … |
 
-     (If codex was gate-skipped this round, fill its row with `skipped — <reason>` rather than
-     counts — the A/B comparison only exists on rounds where codex actually ran.)
+     (Fill a reviewer's row with `skipped — <reason>` or `failed — <reason>` instead of counts
+     when it did not produce a usable review. Codex's row is `skipped` on most rounds by design;
+     the /custom-review vs /code-review comparison exists on every round.)
 
      ### Actionable signal for custom-review improvement
 
-     - <what custom-review missed that codex caught — specific finding + why it should have caught it>
+     - <what custom-review missed that a peer caught — specific finding, which peer, and why
+       custom-review should have caught it (name the angle or verification step it lacks)>
      - <where custom-review over-flagged — what heuristic produced the noise>
-     - <where custom-review outperformed codex — what to preserve / amplify>
+     - <where custom-review outperformed its peers — what to preserve / amplify>
 
      ### Critical count (pre-fix)
 
-     <number across both reviewers>
+     <number across all reviewers that ran>
      ```
 
    - **Print a chat summary** of each reviewer's performance for this round (2–4 sentences per reviewer, focused on accuracy/depth/over-under).
 
 3. **Stop** per the critical-count stop rule, then increment N and repeat if needed.
 
-**Codex-unavailable handling differs from Step 2.** If codex did not run on a round — unavailable, or auto-skipped by multi-review's gate — do **not** raise the stop threshold here. multi-review's claude reviewer (custom-review) always runs and is authoritative for the critical check. A gate-skipped codex round means the gate judged the change low-stakes; trust that and gate on custom-review's pre-fix criticals as usual.
+**Codex-unavailable handling differs from Step 2.** If codex did not run on a round — unavailable, or auto-skipped by multi-review's gate — do **not** raise the stop threshold here. Step 2 raises it because plan review has exactly one reviewer left without codex; here two claude reviewers (`custom-review` + `code-review`) always run and are authoritative for the critical check. A gate-skipped codex round means the gate judged the change low-stakes; trust that and gate on the pre-fix criticals as usual.
+
+Do not raise the threshold when `code-review` alone fails, either: `custom-review` remains the load-bearing reviewer and the gate stays a no-criticals gate. But if the round's report shows **both** claude reviewers failing, that is a broken round, not a clean one — re-dispatch it rather than reading a missing review as zero criticals.
 
 ## Step 5 — Push and open PR
 
