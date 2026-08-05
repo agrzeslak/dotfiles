@@ -1,11 +1,11 @@
 ---
 name: plan-implement-merge
-description: End-to-end pipeline that plans a change with superpowers, hardens the plan via a codex + plan-review-skill review loop, implements it test-driven via subagents, then hardens the implementation through a local multi-review loop until no critical findings remain, opens a review-clean PR, gates the merge on a green CI run, then runs cleanup. Use when the user invokes `/plan-implement-merge <description or path>` and wants the whole plan → review → implement → review → PR → merge pipeline run autonomously. Argument is auto-detected as a file path (if it resolves on disk) or treated as an inline description otherwise.
+description: End-to-end pipeline that plans a change with superpowers, hardens the plan via a codex + plan-review-skill review loop, implements it test-driven via subagents, then hardens the implementation through a local multi-review loop that runs until its review coverage converges, opens a review-clean PR, gates the merge on a green CI run, then runs cleanup. Use when the user invokes `/plan-implement-merge <description or path>` and wants the whole plan → review → implement → review → PR → merge pipeline run autonomously. Argument is auto-detected as a file path (if it resolves on disk) or treated as an inline description otherwise.
 ---
 
 # Plan → Implement → Merge
 
-Autonomous pipeline. Given a description or spec path, this skill plans, reviews the plan, implements TDD via subagents, iterates a local multi-review loop until clean, opens a review-clean PR, gates the merge on a green CI run, and cleans up. No iteration cap — the loops run until their stop conditions are met.
+Autonomous pipeline. Given a description or spec path, this skill plans, reviews the plan, implements TDD via subagents, iterates a local multi-review loop until its review coverage converges, opens a review-clean PR, gates the merge on a green CI run, and cleans up. No iteration cap and no count thresholds — each review loop runs until no unreviewed surface is left that is worth another round (see the [convergence stop rule](#convergence-stop-rule-loops-in-steps-2-4-and-6)).
 
 ## Orchestrator model
 
@@ -17,7 +17,7 @@ The agent that runs this skill is the **orchestrator**. It does not do a step's 
 - the **plan file path** (Step 1);
 - the **feature branch** and **base branch** (Branching);
 - the **PR number** (Step 5);
-- per-loop **round counts** and the latest **pre-fix critical count** each round reported.
+- per review loop, a **coverage ledger** — one compact entry per round recording: the gap that round was dispatched against, the surface and angles it examined, the gaps its findings opened (each with the finding that evidences it), the surface its own fixes rewrote, which reviewers ran / failed / degraded, and per-reviewer severity counts. Round 1 records the changed-region (or plan-section) inventory; later rounds record only **deltas** — fix code added, angles opened or closed — so the ledger stays small. The counts are for `tmp/review-comparison.md`, not for the stop decision.
 
 **The orchestrator's only jobs:**
 
@@ -28,7 +28,9 @@ The agent that runs this skill is the **orchestrator**. It does not do a step's 
 
 **Push invariant.** A push fires CI. To keep CI off intermediate work, **only two actions ever push:** opening the PR (Step 5) and re-pushing a CI fix after it has cleared review (Step 6). Every review/fix subagent **commits but never pushes**; the orchestrator performs the push.
 
-**Two gates, sequential.** The PR is *opened* only after the multi-review loop reports no pre-fix criticals (Step 4) — that loop runs entirely on the local branch (`against <base>`), so no PR exists and no CI fires while review iterates. The PR then *merges* only once CI is green on its head (Step 6). The two stay independent — a clean AI review is not a passing build — but they no longer overlap on a live PR: review fully precedes the PR, so CI runs on already-reviewed code. The lone crossover is a *substantive* CI fix (Step 6), which re-enters the review gate locally before being pushed, so the gates never fall out of sync.
+**Two gates, sequential.** The PR is *opened* only after the multi-review loop converges — no unreviewed surface left that is worth another round (Step 4) — and that loop runs entirely on the local branch (`against <base>`), so no PR exists and no CI fires while review iterates. The PR then *merges* only once CI is green on its head (Step 6). The two stay independent — a converged AI review is not a passing build — but they no longer overlap on a live PR: review fully precedes the PR, so CI runs on already-reviewed code. The lone crossover is a *substantive* CI fix (Step 6), which re-enters the review gate locally before being pushed, so the gates never fall out of sync.
+
+Gate 1 is a **judgment**, not an arithmetic check, and it is deliberately not the last line of defense: gate 2's CI and the human review of the PR both come after it. That is what licenses the loop to stop while a reviewer would still, given another round, say something.
 
 ## Argument handling
 
@@ -48,7 +50,7 @@ The orchestrator runs these directly (they are light and produce part of the dur
 3. **Required skills available:** `superpowers:brainstorming`, `superpowers:writing-plans`, `superpowers:test-driven-development`, `superpowers:subagent-driven-development`, `superpowers:verification-before-completion`, `plan-review-skill`, `multi-review`, `cleanup`. Check the available-skills list; refuse with the missing names if any are absent. Additionally, **if** the argument requests isolation (see Branching), also require `superpowers:using-git-worktrees` and refuse if absent — checking now avoids failing mid-run after planning has started.
 4. **`codex` is on `PATH`.** Run `command -v codex`. If missing, refuse — codex is required for the plan-review loop (Step 2). In the multi-review loop (Step 4) codex is used *selectively*: multi-review's own codex gate auto-decides per round whether to spend codex's limited budget, so codex won't run every round — but it must still be installed so the gate can choose to use it.
 5. **`multi-review` supports `--auto-apply`.** This pipeline runs `/multi-review` inside a subagent loop where no human is present to answer its "Apply these fixes now?" prompt. Confirm the installed `multi-review/SKILL.md` documents an `--auto-apply` control flag (grep for `--auto-apply`); refuse if absent so the operator can update the skill before relying on an autonomous loop that would otherwise stall.
-6. **The installed `multi-review` runs `code-review` alongside `custom-review`.** Grep the same `multi-review/SKILL.md` for `code-review`. If absent, do **not** refuse — the loop still works on one claude reviewer — but print one line saying the review gate will run with a single claude reviewer this run, so a thin review round is never mistaken for a clean one. Step 4's round prompt asks for per-reviewer counts that an older `multi-review` cannot supply; this is where that mismatch is caught, rather than in a confusing subagent report.
+6. **The installed `multi-review` runs `code-review` alongside `custom-review`.** Grep the same `multi-review/SKILL.md` for `code-review`. If absent, do **not** refuse — the loop still works on one claude reviewer — but print one line saying the review gate will run with a single claude reviewer this run, so a round that covered fewer angles is never mistaken for a converged one. Step 4's round prompt asks for per-reviewer coverage and counts that an older `multi-review` cannot supply; this is where that mismatch is caught, rather than in a confusing subagent report.
 
 ## Branching
 
@@ -80,13 +82,36 @@ When a review or CI subagent fixes a finding, it decides per-finding whether a f
 - **Write the test first** when the finding is a behavioral defect expressible as an assertion against a callable unit — wrong/missing branch, off-by-one, wrong output shape, regression, silent layer mismatch, or a failing/flaky test. Watch it fail *for the right reason* (the bug the finding describes, not a syntax or import error), implement the fix, watch it go green. Follow `superpowers:test-driven-development`.
 - **Skip the test** — do not shoehorn ceremony — for a pure rename, a comment/docs edit, a formatting/lint change, dead-code removal, a type-only tweak with no runtime effect, a config/build change with no unit-testable surface, a UI/visual change better verified otherwise, or a finding already covered by an existing failing test you can name. Briefly note in the commit message why no test was added.
 
-### Critical-count stop rule (loop Steps 2 and 4)
+### Convergence stop rule (loops in Steps 2, 4, and 6)
 
-A round reviews, then applies fixes (and, in Step 4, commits them). **Exit the loop the moment a round's pre-fix critical count is 0** — that round's fixes are trusted and already applied; any residue is caught by the next gate. The pre-fix critical count is the *only* gate; non-critical findings in an otherwise-clean round are applied and then the loop ends.
+A round reviews, then applies every finding regardless of severity (and, in Steps 4 and 6, commits them). The round itself never decides anything: the orchestrator reads the round's report and decides whether to dispatch another.
 
-Severity is reviewer-assigned: trust the labels reviewers print. Treat `critical`, `blocking`, `P0`, or equivalent as critical; if a reviewer labels inconsistently, take the highest severity it assigned for that finding.
+**Why a count can never be the gate.** Each round reviews code — or a plan — that the *previous round just wrote*. Reviewers will label something critical on any nontrivial fresh diff, so a nonzero per-round finding count is the **steady state of a healthy loop**, not evidence of an unhealthy branch. Rounds manufacture their own successors, and a count-based gate therefore has no fixed point; it forces rounds long past the point where they buy anything. What genuinely runs out is **surface** — the regions and angles a review can still examine. Surface is the only quantity here that decreases, so it is the one the stop rule tracks.
 
-**Anti-rule:** never dispatch a follow-up round solely to confirm the previous round's fixes landed. A round exists only to surface *new* criticals; if the pre-fix count was already 0 there is nothing to confirm. Subagents therefore must **not** run a second review pass over their own fixes — they report pre-fix counts, and the orchestrator decides whether to dispatch the next round.
+**The rule.** Continue only while **named** unreviewed-or-under-reviewed surface remains. A gap is one of exactly two things:
+
+- **Unreviewed region** — surface the work materially changed that no round has examined: the branch's changed code in Steps 4 and 6, the plan's sections in Step 2. This includes what a round's own fixes just wrote or rewrote, when those were broad enough to constitute new surface.
+- **Under-reviewed angle** — surface that *was* examined, but not for the question a prior round's finding evidenced. One finding about a single call site can reveal that the whole error path was never traced: that path is covered by file and uncovered by question.
+
+**No gap ⇒ stop, unconditionally.** A namable gap is *necessary* to continue and never *sufficient*: once one exists, weigh whether covering it is worth the round (see Calibration and Tiebreak). Nothing buys a round when no gap can be named — not a critical count, not a reviewer's insistence, not unease.
+
+**Guard — gaps are evidenced, never invented.** Angles are infinitely enumerable in the abstract, so "we haven't examined X through lens Y" would license unlimited rounds. A gap counts only if it is anchored in the work itself (changed surface, never examined) or in a prior round's *actual* finding. An angle the orchestrator thought up on the spot is not a gap.
+
+**Coverage is a closed inventory, not an open question.** Never ask a round "what did you not examine?" — asked open-endedly, a reviewer always returns a non-empty list, and that becomes a fresh engine for endless rounds, exactly the failure this rule replaces. The inventory is bounded and shrinking instead: round 1 is a *full* review, so it closes out the changed-region list; after that the only additions are the fix code later rounds write and the angles their findings evidence. Dispatch against named entries in the coverage ledger, nothing else.
+
+**Calibration — stakes set the bar for "sufficiently reviewed".** How crucial and complex the reviewed component is determines how thoroughly its surface must be covered before it counts as done; it is not an independent round budget. A small, low-stakes component's surface is covered by one pass — one round is a legitimate whole loop. A security-sensitive or intricate one warrants more angles over the same surface. This is the orchestrator reading what it is reviewing; there is no caller flag for it.
+
+**Converged looks like this:** rounds landing on the same surface through the same angles, nothing novel — reviewers circling, residue that is preference, phrasing, or taste.
+
+**Tiebreak, for marginal calls only.** When a gap exists but its value is unclear, price the *actual* next round (rounds after the first are gap-scoped and cheaper than round 1) against what the later gates catch anyway: Step 6's CI and the human review of the PR. These settle a close call. They never outvote a genuine gap, and they never manufacture one.
+
+**A confirmation round is not a thing.** "The fixes landed" is never itself a reason to spend a round, and subagents must **not** review their own fixes — they report, the orchestrator decides. A sweep over fix code is justified by the fixes' *breadth* (broad fixes are new surface), never by wanting to verify them.
+
+**A failed review is not a converged one.** If a round produced no usable review — Step 4's both-claude-reviewers-failed case — its surface went unexamined, so the rule already says re-dispatch. Never read a missing review as an empty gap list.
+
+**One-line rationale, either way.** Print the decision and its reason whether continuing or stopping. Symmetric friction matters: if only stopping required an argument, continuing would stay free and the loop would drift back into running forever. Continuing names the gap; stopping names the saturation.
+
+**Severity labels still get recorded, but they are not a stop input.** Severity is reviewer-assigned: trust the labels reviewers print, and where a reviewer labels inconsistently take the highest severity it assigned that finding. Counts feed `tmp/review-comparison.md`'s scorecard (Step 4), whose purpose is improving `custom-review`. Do not re-derive a count gate from them.
 
 ### gh is unsandboxable
 
@@ -121,7 +146,9 @@ If scope is genuinely open-ended (a vague description with no settled shape), in
 
 ## Step 2 — Plan review loop
 
-Orchestrator loops; each round is a fresh subagent. Stop per the [critical-count stop rule](#critical-count-stop-rule-loop-steps-2-and-4) on the **pre-fix** critical count.
+Orchestrator loops; each round is a fresh subagent. Stop per the [convergence stop rule](#convergence-stop-rule-loops-in-steps-2-4-and-6). The surface here is the plan's sections, decisions, and risks; the angles are the lenses reviewers apply to them (`plan-review-skill`'s VP Product / VP Engineering / VP Design are three distinct angles over the same surface).
+
+One wrinkle specific to plan review: a round's fixes *rewrite the plan*, and a restructured section is proportionally far more new surface than a code fix is. Expect that to legitimately buy rounds here that it would not buy in Step 4 — and expect a round to name it.
 
 Per round, dispatch one subagent:
 
@@ -129,6 +156,8 @@ Per round, dispatch one subagent:
 Round N — plan review
 
 Plan file: <path>
+Gap this round covers: <the gap named from the ledger; for round 1, the whole plan>
+Already examined: <the ledger's one-line surface/angle entries from prior rounds; empty for round 1>
 
 Run these reviews in parallel:
   1. codex `/review` against the plan file. Save output to tmp/plan-implement-merge/round-N/codex.md.
@@ -139,27 +168,38 @@ Run these reviews in parallel:
      report — execute that skill in plan mode against the plan file, reading its SKILL.md and
      following it exactly. Save its report to tmp/plan-implement-merge/round-N/gate-check.md.
      Its findings carry binding-source citations (e.g. ADR / living doc / budget pin) and
-     ready-to-apply `plan-change:` lines; preserve both when merging. Its criticals count toward
-     the stop rule like any reviewer's. A repo without the skill is unaffected — skip this step
-     silently.
+     ready-to-apply `plan-change:` lines; preserve both when merging. It is one more angle over
+     the plan's surface, and gaps its findings open count like any reviewer's. A repo without the
+     skill is unaffected — skip this step silently.
 
-If codex fails or reports usage exhaustion, continue with plan-review-skill alone, but raise
-the stop threshold for this and all subsequent rounds: stop only when no critical AND no high
-findings remain (instead of just no-criticals).
+If codex fails or reports usage exhaustion, continue with plan-review-skill alone and say so in
+your report — do not change how you review. A round with one reviewer covered fewer angles than a
+round with three; that is a coverage fact the orchestrator needs, not a reason for you to work
+differently.
 
 Merge findings. Apply every finding regardless of severity by editing the plan file in place.
 
 Report back:
-  - Whether codex ran successfully.
+  - **Coverage:** which plan sections/decisions you examined, and through which angles. For round 1
+    treat this as the plan's section inventory, marking each section examined or not.
+  - **Gaps your findings opened:** any part of the plan that a finding implies was never examined
+    for the question that finding raises — each named together with the finding that evidences it.
+    Report ONLY gaps anchored in an actual finding or in plan surface you did not reach. Do not
+    produce an open-ended "things I didn't cover" list; speculative gaps are not wanted and will
+    be ignored.
+  - **Surface you rewrote:** which sections your applied fixes materially restructured — a rewritten
+    section is new surface a later round may need to examine.
+  - Whether codex ran successfully; any reviewer that failed, and which angles were lost with it.
   - Counts of findings by severity, per reviewer that ran (codex when it ran; plan-review-skill
-    always; the repo-local gate-check reviewer when the repo defines one) — counted from the
-    *pre-fix* review output, before any edits. Print the explicit critical count (and high count
-    if codex was unavailable).
+    always; the repo-local gate-check reviewer when the repo defines one) — from the *pre-fix*
+    review output, before any edits. These are for the record, not for the stop decision.
   - Do NOT run a second review to confirm your fixes — the orchestrator decides whether to
-    dispatch another round based on the pre-fix counts you report.
+    dispatch another round.
 ```
 
-After each report, look at the pre-fix critical count (and pre-fix high count if codex was unavailable). If it is 0, the loop is done — the round's fixes are already applied; exit immediately. Otherwise increment N and repeat. The codex-unavailable threshold raise above is specific to plan review: with only one reviewer left, gate on no-critical *and* no-high.
+After each report, append the round's entry to the plan-review coverage ledger and apply the convergence stop rule: continue only against a named gap the report evidences — an unexamined section, a section the round's own fixes restructured, or an angle a finding pointed at. If the report names none, the loop is done; the round's fixes are already applied. Print the one-line rationale either way, then increment N and repeat if continuing.
+
+Losing codex is a coverage fact, not a threshold change: it means fewer angles were applied to the plan this round. That may itself be the named gap for one more round with the remaining reviewer — but only if the plan's stakes warrant re-examining surface that has already been read once. It never automatically buys a round.
 
 ## Step 3 — Implement (TDD, subagent fan-out)
 
@@ -171,11 +211,11 @@ After all tasks complete, dispatch a verification subagent to run `superpowers:v
 
 ## Step 4 — Multi-review loop (local, no PR)
 
-**No PR exists yet.** This loop hardens the branch entirely on its local committed diff (`against <base>`), so it triggers no push, no `gh`, and no CI. The PR opens in Step 5 only once this loop is clean, so CI runs on already-reviewed code instead of on every intermediate fix — the whole point of doing review before the PR.
+**No PR exists yet.** This loop hardens the branch entirely on its local committed diff (`against <base>`), so it triggers no push, no `gh`, and no CI. The PR opens in Step 5 only once this loop converges, so CI runs on already-reviewed code instead of on every intermediate fix — the whole point of doing review before the PR.
 
 **Precondition — clean tree.** The `against <base>` target diffs *committed* changes only (`git diff <base>...HEAD`). Before the first round, ensure all of Step 3's implementation is committed and the working tree is clean; otherwise the first round's diff is incomplete. Each round's subagent commits its own fixes, so the tree stays clean between rounds and every round sees the full, accurate branch-vs-base change.
 
-Orchestrator loops; each round is a fresh subagent. Stop per the [critical-count stop rule](#critical-count-stop-rule-loop-steps-2-and-4) on the **pre-fix** critical count across whichever reviewers ran.
+Orchestrator loops; each round is a fresh subagent. Stop per the [convergence stop rule](#convergence-stop-rule-loops-in-steps-2-4-and-6). The surface here is the branch's changed regions; the angles are the questions reviewers ask of them. Round 1 is a full review, which closes out the region inventory — so from round 2 on, the only gaps that can exist are the fix code earlier rounds wrote and the angles their findings evidenced.
 
 Initialize `<repo root>/tmp/review-comparison.md` if it does not exist. It is a running cumulative log designed to drive **improvements to `custom-review`** specifically — the one reviewer in the roster that is ours to edit. Each entry should be actionable for future skill edits: what `custom-review` missed that a peer reviewer caught, what it over-flagged, where its depth fell short of or exceeded the peers. Its peers are the built-in `/code-review` (every round) and codex (when multi-review's gate spends the budget), so **every** round yields comparison data now, not only codex rounds.
 
@@ -186,19 +226,31 @@ Per round:
    ```
    Round N — multi-review of branch <feature-branch> against <base>
 
+   Gap this round covers: <the gap named from the coverage ledger; for round 1, the full diff>
+   Already examined: <the ledger's one-line surface/angle entries from prior rounds; empty for round 1>
+
    Run `/multi-review against <base> --auto-apply`. The `against <base>` form selects the
    branch target — multi-review reviews the local committed diff `git diff <base>...HEAD`
    with no PR, no push, and no `gh`. The `--auto-apply` flag is required so multi-review skips
    its interactive "Apply these fixes now?" prompt and applies fixes directly — without it,
    this subagent has no human to answer and the loop stalls.
 
-   Pass focus text targeting the gaps/changes from the previous round only — do NOT re-review
-   the entire branch diff. Round 1's focus text is empty (full review); for round N>1 it is
-   "<short description of what changed since round N-1, with file paths>".
+   Focus text is **the gap named above**, verbatim in substance — not a generic diff of what
+   changed since the last round. Round 1's focus text is empty (full review, which closes out
+   the region inventory). For round N>1 the gap may be a region (the fix code an earlier round
+   wrote) or an angle spanning surface already read once (e.g. "trace the error path across all
+   touched files — round 2's finding at foo.rs:88 shows it was never examined"). When the gap is
+   an angle, you SHOULD look at previously-reviewed files: that is the point. What you must not
+   do is re-review the whole diff from scratch for no named reason.
 
-   Do NOT pass --codex or --no-codex: let multi-review's codex gate auto-decide whether this
-   change and this round warrant codex's limited budget. codex may legitimately be skipped
-   (e.g. a doc/mechanical change, or a clean later round); that is expected, not a failure.
+   Codex: by default do NOT pass --codex or --no-codex — let multi-review's gate auto-decide
+   whether this change and this round warrant codex's limited budget. codex may legitimately be
+   skipped (e.g. a doc/mechanical change, or a quiet later round); that is expected, not a
+   failure. The single exception is stated in the "Gap this round covers" line above: when the
+   gap is an angle the standing claude roster structurally does not ask, that line will say
+   "force --codex" — pass it then and only then. codex is not extra surface, it is an extra
+   angle, so one deliberately thicker round beats several thin repeats.
+
    The two claude reviewers — /custom-review and the built-in /code-review — are ungated and
    run in parallel every round, so a codex-skipped round is still a multi-reviewer round.
    The skill saves verbatim reviewer outputs under tmp/multi-review/, synthesizes a merged
@@ -216,13 +268,27 @@ Per round:
    review pass to confirm the fixes — the orchestrator decides whether to dispatch another round.
 
    Report back:
+     - **Coverage:** which changed regions you examined and through which angles. For round 1 —
+       the full review — give this as the branch's changed-region inventory (file, and the area
+       within it), marking each region examined or not; that inventory is what later rounds are
+       measured against, so make it complete. Derive it from `git diff --stat <base>...HEAD` plus
+       the file:line anchors in the reviewer outputs under tmp/multi-review/ — multi-review does
+       not emit an inventory of its own.
+     - **Gaps your findings opened:** any surface a finding implies was never examined for the
+       question that finding raises — each named with the finding (file:line) that evidences it,
+       and whether covering it needs an angle the claude reviewers structurally do not ask.
+       Report ONLY gaps anchored in an actual finding or in changed surface you did not reach.
+       Do not produce an open-ended "things I didn't cover" list: speculative gaps will be
+       ignored, and inventing them would keep this loop running forever.
+     - **Surface your fixes wrote:** the files/regions your applied fixes materially changed, and
+       whether that constitutes new surface (a broad behavioral rewrite) or not (a one-line
+       guard, a rename, a comment).
      - Counts of findings by severity, per reviewer that ran (custom-review and code-review
        always; codex only if the gate ran it; the repo-local gate-check reviewer when the repo
        defines one — multi-review runs it automatically) — from the *pre-fix* review output,
        before any fixes. code-review ships no severity labels of its own, so report the
        severities multi-review assigned its findings in the merge, plus its CONFIRMED/PLAUSIBLE
-       split.
-     - The pre-fix critical count across whichever reviewers ran (explicit number).
+       split. These are for the comparison log, not for the stop decision.
      - For the comparison file: per-reviewer observations on accuracy (true vs false positives),
        depth (did they trace data flow / cite file:line / catch semantic gaps), and
        over/underrepresentation — focused on what custom-review did or missed vs its peers.
@@ -244,8 +310,8 @@ Per round:
      ```markdown
      ## Round N — <ISO date>
 
-     **Diff scope:** <files / focus text given to multi-review>
-     **Codex ran:** yes | no (if no: <gate reason, e.g. "auto-skipped — clean round 2" / "unavailable">)
+     **Gap covered:** <the gap this round was dispatched against; round 1 = full diff>
+     **Codex ran:** yes | no (if no: <gate reason, e.g. "auto-skipped — quiet round 2" / "unavailable">)
      **code-review:** <level> · <fan-out | single-pass> | failed — <reason>
 
      ### Per-reviewer scorecard
@@ -267,22 +333,32 @@ Per round:
      - <where custom-review over-flagged — what heuristic produced the noise>
      - <where custom-review outperformed its peers — what to preserve / amplify>
 
-     ### Critical count (pre-fix)
+     ### Coverage
 
-     <number across all reviewers that ran>
+     **Examined this round:** <regions / angles>
+     **Gaps opened by findings:** <gap — evidencing finding at file:line> | none
+     **Surface the fixes wrote:** <regions — new surface | not new surface>
+     **Severity counts (pre-fix, per reviewer):** <for the record, not a stop input>
+
+     ### Decision
+
+     continue — <the named gap this buys a round for> | stop — <what saturated>
      ```
 
+   - **Append the round's entry to the coverage ledger** (orchestrator state, deltas only after round 1).
    - **Print a chat summary** of each reviewer's performance for this round (2–4 sentences per reviewer, focused on accuracy/depth/over-under).
 
-3. **Stop** per the critical-count stop rule, then increment N and repeat if needed.
+3. **Decide** per the convergence stop rule, print the one-line rationale, then increment N and repeat if a gap was named and is worth covering. When the named gap is an angle the claude reviewers structurally do not ask, put `force --codex` in the next round's "Gap this round covers" line — one thicker round instead of several thin ones.
 
-**Codex-unavailable handling differs from Step 2.** If codex did not run on a round — unavailable, or auto-skipped by multi-review's gate — do **not** raise the stop threshold here. Step 2 raises it because plan review has exactly one reviewer left without codex; here two claude reviewers (`custom-review` + `code-review`) always run and are authoritative for the critical check. A gate-skipped codex round means the gate judged the change low-stakes; trust that and gate on the pre-fix criticals as usual.
+**Reviewer coverage is an input to the gap question, never a threshold.** Step 2's old codex rule raised the bar when a reviewer was missing; nothing like that exists here, in either loop.
 
-Do not raise the threshold when `code-review` alone fails, either: `custom-review` remains the load-bearing reviewer and the gate stays a no-criticals gate. But if the round's report shows **both** claude reviewers failing, that is a broken round, not a clean one — re-dispatch it rather than reading a missing review as zero criticals.
+- **Codex auto-skipped by multi-review's gate** — the common case, and a judgment that the change is low-stakes. Trust it. Not a gap on its own.
+- **Codex unavailable, or `code-review` alone failed** — one angle less was applied this round. That is a coverage fact to record, and it can only buy a round if it leaves a *named* gap the remaining reviewers plainly did not cover, weighed against the component's stakes. `custom-review` remains the load-bearing reviewer.
+- **Both claude reviewers failed** — the round examined nothing. Not a converged round; re-dispatch the same gap.
 
 ## Step 5 — Push and open PR
 
-The branch is now implemented and review-clean (Step 4 exited with no pre-fix criticals). Per the push invariant, **the orchestrator pushes the branch** — this is the deliberate first push that triggers the first (and ideally only) full CI run, on code that has already cleared the review gate.
+The branch is now implemented and review-clean (Step 4's loop converged — no unreviewed surface left worth a round). Per the push invariant, **the orchestrator pushes the branch** — this is the deliberate first push that triggers the first (and ideally only) full CI run, on code that has already cleared the review gate.
 
 Then dispatch a subagent to author the PR and report back its number:
 
@@ -302,7 +378,7 @@ Report back: the PR number and URL.
 
 ## Step 6 — CI gate
 
-**The PR does not merge until CI is green.** This is the second merge gate, independent of Step 4: the multi-review loop trusts its own fixes and never watches the remote build, so a clean review can still sit on a red pipeline. Before cleanup, confirm the PR's head passes all required checks — and if it doesn't, fix it the same way the earlier loops fix what their reviewers find.
+**The PR does not merge until CI is green.** This is the second merge gate, independent of Step 4: the multi-review loop trusts its own fixes and never watches the remote build, so a converged review can still sit on a red pipeline. Before cleanup, confirm the PR's head passes all required checks — and if it doesn't, fix it the same way the earlier loops fix what their reviewers find.
 
 **Stop rule:** exit when all checks on the current PR head report success. If the repo has no checks at all, see "No CI configured" below.
 
@@ -344,7 +420,7 @@ Per round:
 
    Before dispatching, append the **TDD for fixes** bullets and the **Comment hygiene** blockquote from [Shared subagent conventions](#shared-subagent-conventions) to that prompt verbatim.
 
-4. **Re-review substantive fixes — before pushing.** If the fix subagent reported a *substantive behavioral change* (anything beyond a lint/format/flake/config/infra fix), re-enter the Step 4 multi-review loop (`against <base>`, local) scoped to just those changes, iterating until its pre-fix critical count is 0 — a change large enough to alter behavior must also clear the no-criticals gate, or the two gates fall out of sync. The fix is already committed, so the loop diffs it correctly, and nothing is pushed during the re-review. Trivial fixes skip this step; if the subagent's classification is unclear or you doubt it, treat the fix as substantive and re-review — a redundant local review is cheap next to merging unreviewed behavior.
+4. **Re-review substantive fixes — before pushing.** If the fix subagent reported a *substantive behavioral change* (anything beyond a lint/format/flake/config/infra fix), re-enter the Step 4 multi-review loop (`against <base>`, local) scoped to just those changes, running it under the [convergence stop rule](#convergence-stop-rule-loops-in-steps-2-4-and-6) — a change large enough to alter behavior is new surface and must be examined, or the two gates fall out of sync. The fix is already committed, so the loop diffs it correctly, and nothing is pushed during the re-review. This re-review starts with a small, sharply-bounded surface — one round usually covers it, and it converges as soon as the fix's own regions have been examined and its findings opened no further gap. Trivial fixes skip this step entirely; if the subagent's classification is unclear or you doubt it, treat the fix as substantive and re-review — one local round is cheap next to merging unreviewed behavior.
 
 5. **Push the (now review-clean) head and re-watch.** The orchestrator pushes (`git push`) and returns to the top of this loop. Because any substantive fix was re-reviewed in step 4 above before this push, CI never runs on un-reviewed code.
 
@@ -352,8 +428,8 @@ Per round:
 
 ## Step 7 — Cleanup
 
-Invoke the `cleanup` skill **in the orchestrator** (not a subagent): it is the final step, so context cost is moot, and it may need to interact (e.g. SESSION.md triage). It merges the PR, deletes the branch, sweeps stale branches, and drains `SESSION.md`. By the time this runs, both merge-gate conditions (Step 4 no-criticals, Step 6 green CI) are satisfied.
+Invoke the `cleanup` skill **in the orchestrator** (not a subagent): it is the final step, so context cost is moot, and it may need to interact (e.g. SESSION.md triage). It merges the PR, deletes the branch, sweeps stale branches, and drains `SESSION.md`. By the time this runs, both merge-gate conditions (Step 4's review converged, Step 6's CI green) are satisfied.
 
 ## Reporting
 
-End-of-turn summary (one or two sentences): the merged PR number, the branch, the number of plan-review rounds, local multi-review rounds (run before the PR opened), and CI-fix rounds; explicit confirmation that CI was green at merge; and the path to `tmp/review-comparison.md`.
+End-of-turn summary (one or two sentences): the merged PR number, the branch, the number of plan-review rounds, local multi-review rounds (run before the PR opened), and CI-fix rounds; **each review loop's stop rationale — what surface saturated**; explicit confirmation that CI was green at merge; and the path to `tmp/review-comparison.md`.
