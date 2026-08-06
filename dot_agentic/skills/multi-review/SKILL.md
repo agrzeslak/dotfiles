@@ -441,7 +441,7 @@ Print the full contents of `merged-<slug>.md` inline in the chat.
 
 ### Gate verdict (always emitted — reviewer-roster-independent)
 
-The **gate** is the pre-fix critical count, and it is the skill's primary machine-readable output: callers such as `plan-implement-merge` loop on it (review → fix → re-review) until it reads zero. The merged review always groups findings by severity (blocking → medium → optional) and is produced *before* any fixes (Step 6), so its blocking section **is** the pre-fix critical set — whichever reviewers contributed to it. Count it from the merged review and print exactly one line:
+The **gate** is the pre-fix critical count, and it is the skill's primary machine-readable output: one run's measurement, for programmatic callers to record. It is deliberately **not** a loop-termination condition — a re-review round examines code a previous round just wrote, so a nonzero count is the steady state of a healthy review loop rather than a signal to run another round. What a caller does with the number is the caller's judgment; `plan-implement-merge`, for one, stops its loops on review-coverage convergence and feeds these counts only to its reviewer scorecard. The merged review always groups findings by severity (blocking → medium → optional) and is produced *before* any fixes (Step 6), so its blocking section **is** the pre-fix critical set — whichever reviewers contributed to it. Count it from the merged review and print exactly one line:
 
 ```
 gate: <pass|fail> — <N> pre-fix critical finding(s) [reviewers: custom-review+code-review[+codex][+gate-check]]
