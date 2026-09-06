@@ -246,11 +246,15 @@ function nxc_iter_user_passwords
 end
 complete --command nxc_iter_user_passwords --wraps nxc
 
-# Fish git prompt
-set __fish_git_prompt_showuntrackedfiles 'yes'
-set __fish_git_prompt_showdirtystate 'yes'
-set __fish_git_prompt_showstashstate ''
-set __fish_git_prompt_showupstream 'none'
+# Fish git prompt.
+#
+# These are exported rather than merely set because `fish_prompt` renders the
+# git segment in a short-lived child shell (see the timeout handling there),
+# and only exported variables are inherited by that child.
+set -gx __fish_git_prompt_showuntrackedfiles 'yes'
+set -gx __fish_git_prompt_showdirtystate 'yes'
+set -gx __fish_git_prompt_showstashstate ''
+set -gx __fish_git_prompt_showupstream 'none'
 
 # Fish prompt: truncate intermediate directories to 3 characters
 set -g fish_prompt_pwd_dir_length 3
@@ -306,7 +310,7 @@ end
 
 function fish_prompt
 	set_color blue
-	echo -n (hostnamectl hostname)
+	echo -n (hostname)
 
 	if [ $PWD != $HOME ]
 		set_color brblack
@@ -315,8 +319,36 @@ function fish_prompt
 		echo -n (basename $PWD)
 	end
 
-	set_color green
-	printf '%s ' (__fish_git_prompt)
+	# `__fish_git_prompt` shells out to git status/diff/stash. In a very large
+	# repository, or one living on an unresponsive network filesystem, those can
+	# block for a long time and take the whole prompt with them. Bound the work
+	# with `timeout` so a slow repository degrades to a marker instead of hanging.
+	#
+	# `timeout` can only bound an external command, so the prompt function is run
+	# in a child fish. That costs roughly 40ms of extra shell startup per prompt,
+	# which is the price of never hanging; `--no-config` keeps it to that by
+	# skipping this file and conf.d, and the `__fish_git_prompt_*` settings above
+	# are exported so the child still renders the segment identically. On timeout
+	# `timeout` exits 124 and prints nothing, which is what we detect below. It
+	# also signals the whole process group, so the slow git is reaped rather than
+	# left behind to pile up across prompts.
+	#
+	# 1s rather than something more generous: measured across the repositories in
+	# ~/repos the whole segment costs 49-125ms, so the bound sits over ten times
+	# clear of a healthy repository. The only repository that exceeds it is one
+	# with ~118k files in the worktree, where the scan ranges from 0.9s to 6s warm
+	# and far worse cold; no threshold renders that one stably, so the bound is
+	# set to detect breakage quickly rather than to accommodate it. See SESSION.md.
+	set -l git_prompt (timeout 1s fish --no-config -c '__fish_git_prompt')
+	if test $status -eq 124
+		set_color red
+		# The leading space mirrors the one `__fish_git_prompt` prints itself,
+		# so the segment sits the same distance from the directory either way.
+		printf ' %s ' '(git timeout)'
+	else
+		set_color green
+		printf '%s ' $git_prompt
+	end
 
 	# >>> proxy indicator >>>
 	set -l proxy_all_set 0
