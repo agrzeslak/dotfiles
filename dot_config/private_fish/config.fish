@@ -20,8 +20,9 @@ abbr -a ais "aws ec2 describe-instances | jq '.Reservations[] | .Instances[] | {
 abbr -a pm pulsemixer
 abbr -a bt bluetoothctl
 abbr -a cm chezmoi
-abbr -a pset proxy_set
-abbr -a pu proxy_unset
+abbr -a cl claude
+abbr -a clr claude -r
+abbr -a clc claude -c
 
 complete --command paru --wraps pacman
 
