@@ -23,6 +23,8 @@ abbr -a cm chezmoi
 abbr -a cl claude
 abbr -a clr claude -r
 abbr -a clc claude -c
+abbr -a cli claude auth login
+abbr -a clo claude auth logout
 
 complete --command paru --wraps pacman
 
